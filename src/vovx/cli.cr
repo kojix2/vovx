@@ -12,6 +12,12 @@ module VOVX
       exit
     end
 
+    unless voicevox_engine_running?
+      error.puts "VOICEVOX Engine is not running at #{ENGINE_URL}. Start VOICEVOX, then try again."
+      log_event("voicevox_engine.not_running")
+      exit 1
+    end
+
     styles = fetch_voice_styles
     run_app(sentences, styles)
   end

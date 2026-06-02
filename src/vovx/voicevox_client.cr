@@ -10,6 +10,15 @@ module VOVX
     raise "VOICEVOX API error at #{endpoint}: #{response.status_code} #{response.body}"
   end
 
+  # VOICEVOX Engine が起動しているかを軽量なエンドポイントで確認する。
+  def self.voicevox_engine_running? : Bool
+    response = HTTP::Client.get("#{ENGINE_URL}/version")
+    response.success?
+  rescue ex
+    log_event("voicevox_engine.unavailable message=#{ex.message}")
+    false
+  end
+
   # /speakers の JSON から、読み上げに使える talk スタイルだけを抽出する。
   # sing など読み上げ用途ではないスタイルは GUI に出さない。
   def self.parse_voice_styles(body : String) : Array(VoiceStyleOption)
