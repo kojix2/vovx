@@ -4,8 +4,8 @@ module VOVX
   ENGINE_URL      = "http://localhost:50021"
   DEFAULT_SPEAKER =   1
   DEFAULT_RATE    = 1.5
-  WINDOW_WIDTH    = 360
-  WINDOW_HEIGHT   = 190
+  WINDOW_WIDTH    = 240
+  WINDOW_HEIGHT   = 120
 
   # ログは実行ファイルの隣に置く。
   # 開発中や調査時は VOVX_LOG で任意の出力先へ逃がせる。
