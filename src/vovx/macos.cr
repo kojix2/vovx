@@ -1,6 +1,52 @@
 require "uing"
 
 module VOVX
+  # VOICEVOX Engine が未起動の場合に、VOICEVOX アプリを開くか確認する。
+  def self.confirm_start_voicevox : Bool
+    output = IO::Memory.new
+    script = <<-APPLESCRIPT
+      display dialog "VOICEVOX Engine が起動していません。VOICEVOX を起動しますか？" buttons {"キャンセル", "起動"} default button "起動" cancel button "キャンセル" with title "VOVX" with icon caution
+      APPLESCRIPT
+
+    status = Process.run(
+      "osascript",
+      ["-e", script],
+      output: output,
+      error: Process::Redirect::Close
+    )
+
+    status.success? && output.to_s.includes?("button returned:起動")
+  rescue ex
+    log_event("voicevox_start.confirm_failed message=#{ex.message}")
+    false
+  end
+
+  # macOS の Launch Services 経由で VOICEVOX アプリを起動する。
+  def self.start_voicevox_application : Bool
+    status = Process.run(
+      "open",
+      ["-a", VOICEVOX_APP],
+      output: Process::Redirect::Close,
+      error: Process::Redirect::Close
+    )
+    status.success?
+  rescue ex
+    log_event("voicevox_start.open_failed message=#{ex.message}")
+    false
+  end
+
+  # アプリ起動直後は Engine の待受開始まで少し時間がかかるため、短くポーリングする。
+  def self.wait_for_voicevox_engine(max_attempts : Int32 = 30, interval : Time::Span = 1.second) : Bool
+    max_attempts.times do |attempt|
+      return true if voicevox_engine_running?
+
+      log_event("voicevox_start.wait attempt=#{attempt + 1}/#{max_attempts}")
+      sleep interval
+    end
+
+    false
+  end
+
   # macOS のデスクトップ境界を AppleScript で取得する。
   # 失敗時は nil を返し、呼び出し側は中央寄せを諦めて通常表示へ戻す。
   def self.macos_screen_bounds : {Int32, Int32, Int32, Int32}?

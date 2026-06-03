@@ -9,18 +9,24 @@ module VOVX
 
     selected_speaker = styles.first.speaker_id
     slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
-    controller = PlaybackController.new(sentences)
+
+    # macOS の AppKit 初期化は、音声デバイスや別 execution context を作る前に済ませる。
+    # VOICEVOX を起動した直後の経路で、順序が逆だと uiInit 付近で落ちることがある。
+    log_event("ui.init.start")
+    UIng.init
+    log_event("ui.init.done")
 
     # 音声デバイス初期化に失敗しても、後続のログで原因を追えるようにして UI は起動する。
     begin
-      Raudio::AudioDevice.init
-      log_event("audio_device.ready=#{Raudio::AudioDevice.ready?}")
-    rescue ex
-      log_event("audio_device.init_failed message=#{ex.message}")
-    end
+      controller = PlaybackController.new(sentences)
 
-    UIng.init
-    begin
+      begin
+        Raudio::AudioDevice.init
+        log_event("audio_device.ready=#{Raudio::AudioDevice.ready?}")
+      rescue ex
+        log_event("audio_device.init_failed message=#{ex.message}")
+      end
+
       # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
       window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
       window.resizeable = false
