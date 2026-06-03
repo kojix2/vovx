@@ -8,6 +8,7 @@ module VOVX
     property slider_percent : Int32
     property? audio_ready = false
     property? voicevox_ready = false
+    property? pending_autoplay = false
 
     def initialize(@styles : Array(VoiceStyleOption), default_rate : Float64)
       @selected_speaker = styles.first.speaker_id
@@ -64,7 +65,7 @@ module VOVX
       window.show
       focus_current_process
 
-      prepare_voicevox_engine(controls, state, startup_context, start_if_needed: false)
+      prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: false)
 
       UIng.timer(100) do
         focus_current_process
@@ -138,17 +139,22 @@ module VOVX
     end
 
     UIng.queue_main do
+      controller.replace_sentences(sentences)
+      state.pending_autoplay = true
+
       if controller.running?
         controls.status_label.text = "停止中..."
         controller.request_stop
+      elsif state.voicevox_ready?
+        state.pending_autoplay = false
+        start_playback(controls, state, controller)
+      else
+        controls.stop_button.disable
+        controls.speed_slider.enable
+        controls.play_button.enable
+        controls.status_label.text = "新しい入力を受け取りました"
       end
 
-      controller.replace_sentences(sentences)
-      controls.stop_button.disable
-      controls.voice_combobox.enable if state.voicevox_ready?
-      controls.speed_slider.enable
-      controls.play_button.enable
-      controls.status_label.text = "新しい入力を受け取りました"
       controls.window.show
       focus_current_process
     end
@@ -157,7 +163,7 @@ module VOVX
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
     controls.play_button.on_clicked do
       unless state.voicevox_ready?
-        start_voicevox_from_ui(controls, state, startup_context)
+        start_voicevox_from_ui(controls, state, controller, startup_context)
         next
       end
 
@@ -175,10 +181,10 @@ module VOVX
     end
   end
 
-  private def self.start_voicevox_from_ui(controls : AppControls, state : AppState, startup_context : Fiber::ExecutionContext::Parallel) : Nil
+  private def self.start_voicevox_from_ui(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
     controls.play_button.disable
     controls.status_label.text = "VOICEVOX 起動中..."
-    prepare_voicevox_engine(controls, state, startup_context, start_if_needed: true)
+    prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: true)
   end
 
   private def self.start_playback(controls : AppControls, state : AppState, controller : PlaybackController) : Nil
@@ -193,11 +199,16 @@ module VOVX
 
     on_status = ->(message : String) { controls.status_label.text = message }
     on_finish = ->(interrupted : Bool) {
-      controls.play_button.enable
-      controls.stop_button.disable
-      controls.voice_combobox.enable
-      controls.speed_slider.enable
-      controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+      if interrupted && state.pending_autoplay? && state.voicevox_ready?
+        state.pending_autoplay = false
+        start_playback(controls, state, controller)
+      else
+        controls.play_button.enable
+        controls.stop_button.disable
+        controls.voice_combobox.enable
+        controls.speed_slider.enable
+        controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+      end
     }
     controller.start(state.selected_speaker, state.rate, on_status, on_finish)
   end
@@ -245,7 +256,7 @@ module VOVX
     voice_combobox.selected = selected_index.to_i32
   end
 
-  private def self.apply_voicevox_status(controls : AppControls, state : AppState, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
+  private def self.apply_voicevox_status(controls : AppControls, state : AppState, controller : PlaybackController, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
     controls.status_label.text = message
     state.voicevox_ready = ready
 
@@ -259,9 +270,14 @@ module VOVX
     end
 
     controls.play_button.enable
+
+    if ready && state.pending_autoplay?
+      state.pending_autoplay = false
+      start_playback(controls, state, controller)
+    end
   end
 
-  private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil
+  private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil
     startup_context.spawn(name: "vovx-startup") do
       styles = [] of VoiceStyleOption
       message = "待機中"
@@ -312,7 +328,7 @@ module VOVX
         if styles.empty? && start_if_needed
           controls.window.msg_box_error("VOVX", message)
         end
-        apply_voicevox_status(controls, state, styles, message, ready)
+        apply_voicevox_status(controls, state, controller, styles, message, ready)
       end
     end
   end
