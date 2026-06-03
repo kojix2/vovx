@@ -25,7 +25,7 @@ module VOVX
   def self.start_voicevox_application : Bool
     status = Process.run(
       "open",
-      ["-a", VOICEVOX_APP],
+      ["-g", "-j", "-a", VOICEVOX_APP],
       output: Process::Redirect::Close,
       error: Process::Redirect::Close
     )
@@ -36,11 +36,13 @@ module VOVX
   end
 
   # アプリ起動直後は Engine の待受開始まで少し時間がかかるため、短くポーリングする。
-  def self.wait_for_voicevox_engine(max_attempts : Int32 = 30, interval : Time::Span = 1.second) : Bool
+  def self.wait_for_voicevox_engine(max_attempts : Int32 = 30, interval : Time::Span = 1.second, on_attempt : Proc(Int32, Int32, Nil)? = nil) : Bool
     max_attempts.times do |attempt|
       return true if voicevox_engine_running?
 
-      log_event("voicevox_start.wait attempt=#{attempt + 1}/#{max_attempts}")
+      current_attempt = attempt + 1
+      log_event("voicevox_start.wait attempt=#{current_attempt}/#{max_attempts}")
+      on_attempt.try &.call(current_attempt, max_attempts)
       sleep interval
     end
 

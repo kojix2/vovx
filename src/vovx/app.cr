@@ -251,7 +251,11 @@ module VOVX
             end
 
             if can_fetch_styles
-              if wait_for_voicevox_engine
+              if wait_for_voicevox_engine(on_attempt: ->(attempt : Int32, max_attempts : Int32) {
+                   UIng.queue_main do
+                     controls.status_label.text = "VOICEVOX 起動中... #{attempt}/#{max_attempts}"
+                   end
+                 })
                 log_event("voicevox_start.ready")
               else
                 message = "VOICEVOX Engine の起動待ちに失敗しました"

@@ -3,6 +3,34 @@ require "json"
 require "uri/params"
 
 module VOVX
+  ENGINE_CONNECT_TIMEOUT = 1.second
+  ENGINE_HEALTH_TIMEOUT  = 1.second
+  ENGINE_READ_TIMEOUT    = 5.seconds
+  ENGINE_SYNTH_TIMEOUT   = 120.seconds
+
+  private def self.with_engine_client(read_timeout : Time::Span, & : HTTP::Client -> HTTP::Client::Response) : HTTP::Client::Response
+    uri = URI.parse(ENGINE_URL)
+    client = HTTP::Client.new(uri)
+    client.connect_timeout = ENGINE_CONNECT_TIMEOUT
+    client.read_timeout = read_timeout
+
+    yield client
+  ensure
+    client.try &.close
+  end
+
+  private def self.engine_get(path : String, read_timeout : Time::Span = ENGINE_READ_TIMEOUT) : HTTP::Client::Response
+    with_engine_client(read_timeout) do |client|
+      client.get(path)
+    end
+  end
+
+  private def self.engine_post(path : String, headers : HTTP::Headers, body : String? = nil, read_timeout : Time::Span = ENGINE_READ_TIMEOUT) : HTTP::Client::Response
+    with_engine_client(read_timeout) do |client|
+      client.post(path, headers: headers, body: body)
+    end
+  end
+
   # VOICEVOX Engine の HTTP 応答を確認し、失敗時は呼び出し元で扱いやすい例外にする。
   def self.ensure_success!(response : HTTP::Client::Response, endpoint : String) : Nil
     return if response.success?
@@ -12,7 +40,7 @@ module VOVX
 
   # VOICEVOX Engine が起動しているかを軽量なエンドポイントで確認する。
   def self.voicevox_engine_running? : Bool
-    response = HTTP::Client.get("#{ENGINE_URL}/version")
+    response = engine_get("/version", read_timeout: ENGINE_HEALTH_TIMEOUT)
     response.success?
   rescue ex
     log_event("voicevox_engine.unavailable message=#{ex.message}")
@@ -47,7 +75,7 @@ module VOVX
   # 起動中の VOICEVOX Engine から話者一覧を取得する。
   # Engine 未起動でも UI は開けるように、取得失敗時はデフォルト話者へ落とす。
   def self.fetch_voice_styles : Array(VoiceStyleOption)
-    response = HTTP::Client.get("#{ENGINE_URL}/speakers")
+    response = engine_get("/speakers")
     ensure_success!(response, "/speakers")
     parse_voice_styles(response.body)
   rescue ex
@@ -65,8 +93,8 @@ module VOVX
       "speaker" => speaker_id.to_s,
     })
 
-    query_res = HTTP::Client.post(
-      "#{ENGINE_URL}/audio_query?#{query_params}",
+    query_res = engine_post(
+      "/audio_query?#{query_params}",
       headers: HTTP::Headers{"accept" => "application/json"}
     )
     ensure_success!(query_res, "/audio_query")
@@ -79,10 +107,11 @@ module VOVX
       "speaker" => speaker_id.to_s,
     })
 
-    synth_res = HTTP::Client.post(
-      "#{ENGINE_URL}/synthesis?#{synth_params}",
+    synth_res = engine_post(
+      "/synthesis?#{synth_params}",
       headers: HTTP::Headers{"Content-Type" => "application/json"},
-      body: query_json.to_json
+      body: query_json.to_json,
+      read_timeout: ENGINE_SYNTH_TIMEOUT
     )
     ensure_success!(synth_res, "/synthesis")
 
