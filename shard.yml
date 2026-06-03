@@ -13,5 +13,7 @@ dependencies:
     github: kojix2/uing
   raudio:
     github: kojix2/raudio.cr
+  easyclip:
+    github: kojix2/easyclip
 
 license: MIT
