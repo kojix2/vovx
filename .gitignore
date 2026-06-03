@@ -2,5 +2,4 @@
 /lib/
 /bin/
 /.shards/
-/.crystal-cache/
 *.dwarf

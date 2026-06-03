@@ -7,6 +7,10 @@ ifeq ($(release),1)
 BUILD_FLAGS += --release
 endif
 
+ifneq ($(LINK_FLAGS),)
+BUILD_FLAGS += --link-flags="$(LINK_FLAGS)"
+endif
+
 build:
 	shards build $(CRYSTAL_FLAGS) $(BUILD_FLAGS)
 
