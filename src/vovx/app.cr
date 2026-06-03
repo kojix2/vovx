@@ -237,6 +237,7 @@ module VOVX
       styles = [] of VoiceStyleOption
       message = "待機中"
       ready = false
+      can_fetch_styles = true
 
       begin
         unless voicevox_engine_running?
@@ -245,23 +246,26 @@ module VOVX
             log_event("voicevox_start.requested")
             unless start_voicevox_application
               message = "#{VOICEVOX_APP} を起動できませんでした"
+              can_fetch_styles = false
               log_event("voicevox_start.failed")
             end
 
-            if message == "待機中"
+            if can_fetch_styles
               if wait_for_voicevox_engine
                 log_event("voicevox_start.ready")
               else
                 message = "VOICEVOX Engine の起動待ちに失敗しました"
+                can_fetch_styles = false
                 log_event("voicevox_start.timeout")
               end
             end
           else
             message = "VOICEVOX Engine が起動していません"
+            can_fetch_styles = false
           end
         end
 
-        if message == "待機中"
+        if can_fetch_styles
           styles = fetch_voice_styles
           ready = true
           message = "待機中"
