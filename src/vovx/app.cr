@@ -21,6 +21,7 @@ module VOVX
       controller = PlaybackController.new(sentences)
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
       audio_ready = false
+      voicevox_ready = false
 
       # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
       window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
@@ -68,6 +69,23 @@ module VOVX
 
       # 再生中は話者と速度を固定し、停止だけ受け付ける。
       play_button.on_clicked do
+        unless voicevox_ready
+          play_button.disable
+          status_label.text = "VOICEVOX 起動中..."
+          prepare_voicevox_engine(startup_context, window, start_if_needed: true) do |loaded_styles, message, ready|
+            status_label.text = message
+            voicevox_ready = ready
+            if ready
+              styles = loaded_styles
+              selected_speaker = populate_voice_combobox(voice_combobox, styles, selected_speaker)
+              voice_combobox.enable
+              play_button.text = "再生"
+            end
+            play_button.enable
+          end
+          next
+        end
+
         next if controller.running?
 
         log_event("ui.play_clicked")
@@ -119,12 +137,17 @@ module VOVX
       window.show
       focus_current_process
 
-      prepare_voicevox_engine(startup_context, window) do |loaded_styles, message|
+      prepare_voicevox_engine(startup_context, window, start_if_needed: false) do |loaded_styles, message, ready|
         status_label.text = message
-        unless loaded_styles.empty?
+        voicevox_ready = ready
+        if ready
           styles = loaded_styles
           selected_speaker = populate_voice_combobox(voice_combobox, styles, selected_speaker)
           voice_combobox.enable
+          play_button.text = "再生"
+          play_button.enable
+        else
+          play_button.text = "起動"
           play_button.enable
         end
       end
@@ -178,16 +201,17 @@ module VOVX
     selected_speaker
   end
 
-  private def self.prepare_voicevox_engine(startup_context : Fiber::ExecutionContext::Parallel, window : UIng::Window, &on_ready : Array(VoiceStyleOption), String -> Nil) : Nil
+  private def self.prepare_voicevox_engine(startup_context : Fiber::ExecutionContext::Parallel, window : UIng::Window, start_if_needed : Bool, &on_ready : Array(VoiceStyleOption), String, Bool -> Nil) : Nil
     startup_context.spawn(name: "vovx-startup") do
       styles = [] of VoiceStyleOption
       message = "待機中"
+      ready = false
 
       begin
         unless voicevox_engine_running?
           log_event("voicevox_engine.not_running")
-          if confirm_start_voicevox
-            log_event("voicevox_start.confirmed")
+          if start_if_needed
+            log_event("voicevox_start.requested")
             unless start_voicevox_application
               message = "#{VOICEVOX_APP} を起動できませんでした"
               log_event("voicevox_start.failed")
@@ -203,12 +227,13 @@ module VOVX
             end
           else
             message = "VOICEVOX Engine が起動していません"
-            log_event("voicevox_start.cancelled")
           end
         end
 
         if message == "待機中"
           styles = fetch_voice_styles
+          ready = true
+          message = "待機中"
         end
       rescue ex
         message = "VOICEVOX 準備失敗: #{ex.message}"
@@ -216,10 +241,10 @@ module VOVX
       end
 
       UIng.queue_main do
-        if styles.empty?
+        if styles.empty? && start_if_needed
           window.msg_box_error("VOVX", message)
         end
-        on_ready.call(styles, message)
+        on_ready.call(styles, message, ready)
       end
     end
   end
