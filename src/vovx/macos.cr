@@ -1,30 +1,6 @@
 require "uing"
 
 module VOVX
-  # VOICEVOX Engine が未起動の場合に、VOICEVOX アプリを開くか確認する。
-  def self.confirm_start_voicevox : Bool
-    {% unless flag?(:darwin) %}
-      return true
-    {% end %}
-
-    output = IO::Memory.new
-    script = <<-APPLESCRIPT
-      display dialog "VOICEVOX Engine が起動していません。VOICEVOX を起動しますか？" buttons {"キャンセル", "起動"} default button "起動" cancel button "キャンセル" with title "VOVX" with icon caution
-      APPLESCRIPT
-
-    status = Process.run(
-      "osascript",
-      ["-e", script],
-      output: output,
-      error: Process::Redirect::Close
-    )
-
-    status.success? && output.to_s.includes?("button returned:起動")
-  rescue ex
-    log_event("voicevox_start.confirm_failed message=#{ex.message}")
-    false
-  end
-
   # OS ごとの標準的な方法で VOICEVOX アプリを起動する。
   def self.start_voicevox_application : Bool
     {% if flag?(:darwin) %}
@@ -39,13 +15,15 @@ module VOVX
 
   # macOS の Launch Services 経由で VOICEVOX アプリを起動する。
   private def self.start_voicevox_application_macos : Bool
-    status = Process.run(
+    process = Process.new(
       "open",
       ["-g", "-j", "-a", VOICEVOX_APP],
+      input: Process::Redirect::Close,
       output: Process::Redirect::Close,
       error: Process::Redirect::Close
     )
-    status.success?
+    process.close
+    true
   rescue ex
     log_event("voicevox_start.open_failed message=#{ex.message}")
     false
@@ -67,13 +45,13 @@ module VOVX
     desktop_ids = ["voicevox", "VOICEVOX", "jp.hiroshiba.voicevox"]
     if Process.find_executable("gtk-launch")
       desktop_ids.each do |desktop_id|
-        return true if run_launcher("gtk-launch", [desktop_id], "gtk_launch.#{desktop_id}")
+        return true if launch_background("gtk-launch", [desktop_id], "gtk_launch.#{desktop_id}")
       end
     end
 
     desktop_files.each do |desktop_file|
       next unless File.exists?(desktop_file)
-      return true if run_launcher("xdg-open", [desktop_file], "xdg_open.#{File.basename(desktop_file)}")
+      return true if launch_background("xdg-open", [desktop_file], "xdg_open.#{File.basename(desktop_file)}")
     end
 
     if Process.find_executable("flatpak")
@@ -106,55 +84,33 @@ module VOVX
     end
   end
 
-  private def self.run_launcher(command : String, args : Array(String), label : String) : Bool
-    return false unless Process.find_executable(command)
-
-    status = Process.run(
-      command,
-      args,
-      output: Process::Redirect::Close,
-      error: Process::Redirect::Close
-    )
-    if status.success?
-      log_event("voicevox_start.#{label}")
-      true
-    else
-      false
-    end
-  rescue ex
-    log_event("voicevox_start.#{label}_failed message=#{ex.message}")
-    false
-  end
-
   private def self.launch_background(command : String, args : Array(String), label : String) : Bool
     return false unless Process.find_executable(command)
 
-    script = "exec \"$@\" >/dev/null 2>&1 &"
-    status = Process.run(
-      "sh",
-      ["-c", script, "vovx-launch", command] + args,
+    process = Process.new(
+      command,
+      args,
+      input: Process::Redirect::Close,
       output: Process::Redirect::Close,
       error: Process::Redirect::Close
     )
-    if status.success?
-      log_event("voicevox_start.#{label}")
-      true
-    else
-      false
-    end
+    process.close
+    true
   rescue ex
     log_event("voicevox_start.#{label}_failed message=#{ex.message}")
     false
   end
 
   private def self.launch_shell_background(command : String) : Bool
-    status = Process.run(
+    process = Process.new(
       "sh",
-      ["-c", "#{command} >/dev/null 2>&1 &"],
+      ["-c", "exec #{command}"],
+      input: Process::Redirect::Close,
       output: Process::Redirect::Close,
       error: Process::Redirect::Close
     )
-    status.success?
+    process.close
+    true
   rescue ex
     log_event("voicevox_start.custom_command_failed message=#{ex.message}")
     false
