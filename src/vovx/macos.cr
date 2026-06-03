@@ -32,41 +32,60 @@ module VOVX
   # Linux ではインストール形態が分かれるため、明示コマンド、desktop entry、
   # PATH 上の実行ファイルを順に試す。
   private def self.start_voicevox_application_linux : Bool
-    if command = ENV["VOVX_VOICEVOX_COMMAND"]?
-      command = command.strip
-      if command.empty?
-        log_event("voicevox_start.custom_command_empty")
-      elsif launch_shell_background(command)
-        log_event("voicevox_start.custom_command")
-        return true
-      end
-    end
+    return true if launch_custom_voicevox_command
+    return true if launch_voicevox_desktop_entry
+    return true if launch_voicevox_flatpak
+    return true if launch_voicevox_from_path
 
-    desktop_ids = ["voicevox", "VOICEVOX", "jp.hiroshiba.voicevox"]
+    log_event("voicevox_start.linux_no_candidate")
+    false
+  rescue ex
+    log_event("voicevox_start.linux_failed message=#{ex.message}")
+    false
+  end
+
+  private def self.launch_custom_voicevox_command : Bool
+    command = ENV["VOVX_VOICEVOX_COMMAND"]?.try &.strip
+    return false if command.nil?
+
+    if command.empty?
+      log_event("voicevox_start.custom_command_empty")
+      false
+    elsif launch_shell_background(command)
+      log_event("voicevox_start.custom_command")
+      true
+    else
+      false
+    end
+  end
+
+  private def self.launch_voicevox_desktop_entry : Bool
     if Process.find_executable("gtk-launch")
-      desktop_ids.each do |desktop_id|
+      ["voicevox", "VOICEVOX", "jp.hiroshiba.voicevox"].each do |desktop_id|
         return true if launch_background("gtk-launch", [desktop_id], "gtk_launch.#{desktop_id}")
       end
     end
 
     desktop_files.each do |desktop_file|
       next unless File.exists?(desktop_file)
+
       return true if launch_background("xdg-open", [desktop_file], "xdg_open.#{File.basename(desktop_file)}")
     end
 
-    if Process.find_executable("flatpak")
-      return true if launch_background("flatpak", ["run", "jp.hiroshiba.voicevox"], "flatpak")
-    end
-
-    ["VOICEVOX", "voicevox"].each do |command|
-      next unless Process.find_executable(command)
-      return true if launch_background(command, [] of String, "path.#{command}")
-    end
-
-    log_event("voicevox_start.linux_no_candidate")
     false
-  rescue ex
-    log_event("voicevox_start.linux_failed message=#{ex.message}")
+  end
+
+  private def self.launch_voicevox_flatpak : Bool
+    launch_background("flatpak", ["run", "jp.hiroshiba.voicevox"], "flatpak")
+  end
+
+  private def self.launch_voicevox_from_path : Bool
+    ["VOICEVOX", "voicevox"].each do |executable|
+      next unless Process.find_executable(executable)
+
+      return true if launch_background(executable, [] of String, "path.#{executable}")
+    end
+
     false
   end
 
@@ -144,16 +163,16 @@ module VOVX
       output: output,
       error: Process::Redirect::Close
     )
-    return nil unless status.success?
+    return unless status.success?
 
     parts = output.to_s.strip.split(",").map(&.strip)
-    return nil unless parts.size == 4
+    return unless parts.size == 4
 
     left = parts[0].to_i?
     top = parts[1].to_i?
     right = parts[2].to_i?
     bottom = parts[3].to_i?
-    return nil if left.nil? || top.nil? || right.nil? || bottom.nil?
+    return if left.nil? || top.nil? || right.nil? || bottom.nil?
 
     {left, top, right, bottom}
   rescue

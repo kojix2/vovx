@@ -3,21 +3,24 @@ require "../spec_helper"
 describe VOVX do
   describe ".parse_voice_styles" do
     it "returns talk styles with character names in labels" do
-      styles = VOVX.parse_voice_styles(%([
-        {
-          "name": "四国めたん",
-          "styles": [
-            {"name": "ノーマル", "id": 2, "type": "talk"},
-            {"name": "歌", "id": 6000, "type": "sing"}
-          ]
-        },
-        {
-          "name": "ずんだもん",
-          "styles": [
-            {"name": "あまあま", "id": 1}
-          ]
-        }
-      ]))
+      body = <<-JSON
+        [
+          {
+            "name": "四国めたん",
+            "styles": [
+              {"name": "ノーマル", "id": 2, "type": "talk"},
+              {"name": "歌", "id": 6000, "type": "sing"}
+            ]
+          },
+          {
+            "name": "ずんだもん",
+            "styles": [
+              {"name": "あまあま", "id": 1}
+            ]
+          }
+        ]
+        JSON
+      styles = VOVX.parse_voice_styles(body)
 
       styles.should eq([
         VOVX::VoiceStyleOption.new("四国めたん（ノーマル）", 2),
@@ -26,14 +29,17 @@ describe VOVX do
     end
 
     it "falls back to the default style when no talk styles exist" do
-      styles = VOVX.parse_voice_styles(%([
-        {
-          "name": "歌唱専用",
-          "styles": [
-            {"name": "ソング", "id": 6000, "type": "sing"}
-          ]
-        }
-      ]))
+      body = <<-JSON
+        [
+          {
+            "name": "歌唱専用",
+            "styles": [
+              {"name": "ソング", "id": 6000, "type": "sing"}
+            ]
+          }
+        ]
+        JSON
+      styles = VOVX.parse_voice_styles(body)
 
       styles.should eq([VOVX.default_voice_style])
     end
