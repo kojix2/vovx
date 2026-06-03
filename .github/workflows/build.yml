@@ -1,0 +1,89 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build aarch64-apple-darwin
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: latest
+
+      - name: Set version variables
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${{ github.ref_name }}
+            echo "STRIP_RELEASE=true" >> "$GITHUB_ENV"
+          else
+            VERSION="build-$(date +%Y%m%d-%H%M%S)"
+            echo "STRIP_RELEASE=false" >> "$GITHUB_ENV"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BIN=vovx" >> "$GITHUB_ENV"
+          echo "PKG_NAME=vovx" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          brew update
+          brew install bdw-gc openssl@3 pcre2
+          shards install --without-development
+
+      - name: Run tests
+        run: make spec
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          ln -s "$(brew --prefix bdw-gc)/lib/libgc.a" .
+          ln -s "$(brew --prefix pcre2)/lib/libpcre2-8.a" .
+          ln -s "$(brew --prefix openssl@3)/lib/libssl.a" .
+          ln -s "$(brew --prefix openssl@3)/lib/libcrypto.a" .
+
+          unset PKG_CONFIG_PATH
+          LINK_FLAGS="-L $(pwd) $(pwd)/libgc.a $(pwd)/libpcre2-8.a $(pwd)/libssl.a $(pwd)/libcrypto.a"
+          make build release=1 LINK_FLAGS="$LINK_FLAGS"
+          chmod +x "bin/$BIN"
+          if [[ "$STRIP_RELEASE" == true ]]; then
+            strip "bin/$BIN"
+          fi
+          otool -L "bin/$BIN"
+          if otool -L "bin/$BIN" | grep -E '/opt/homebrew|/usr/local'; then
+            echo "Error: non-portable Homebrew dependency detected"
+            exit 1
+          fi
+          file "bin/$BIN"
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          PKG="${PKG_NAME}-${VERSION}-aarch64-apple-darwin"
+          mkdir -p "$PKG"
+          cp "bin/$BIN" "$PKG/"
+          cp LICENSE "$PKG/"
+          cp README.md "$PKG/"
+          tar czf "$PKG.tar.gz" "$PKG"
+
+      - name: Upload artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: vovx-aarch64-apple-darwin
+          path: vovx-*.tar.gz
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: vovx-*.tar.gz
