@@ -4,28 +4,23 @@ require "uing"
 module VOVX
   # 小さな操作ウィンドウを作り、声・速度・再生/停止を扱う。
   # 実際の合成と再生は PlaybackController に委譲する。
-  def self.run_app(sentences : Array(String), styles : Array(VoiceStyleOption), default_rate : Float64 = DEFAULT_RATE) : Nil
-    log_event("app.run sentences=#{sentences.size} styles=#{styles.size}")
+  def self.run_app(sentences : Array(String), initial_styles : Array(VoiceStyleOption), default_rate : Float64 = DEFAULT_RATE) : Nil
+    log_event("app.run sentences=#{sentences.size} styles=#{initial_styles.size}")
 
+    styles = initial_styles
     selected_speaker = styles.first.speaker_id
     slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
 
-    # macOS の AppKit 初期化は、音声デバイスや別 execution context を作る前に済ませる。
-    # VOICEVOX を起動した直後の経路で、順序が逆だと uiInit 付近で落ちることがある。
+    # macOS の AppKit 初期化と main loop は OS main thread で実行する必要がある。
+    # Engine 起動確認や HTTP 取得は、この後で background context 側へ逃がす。
     log_event("ui.init.start")
     UIng.init
     log_event("ui.init.done")
 
-    # 音声デバイス初期化に失敗しても、後続のログで原因を追えるようにして UI は起動する。
     begin
       controller = PlaybackController.new(sentences)
-
-      begin
-        Raudio::AudioDevice.init
-        log_event("audio_device.ready=#{Raudio::AudioDevice.ready?}")
-      rescue ex
-        log_event("audio_device.init_failed message=#{ex.message}")
-      end
+      startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
+      audio_ready = false
 
       # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
       window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
@@ -36,24 +31,13 @@ module VOVX
 
       # DEFAULT_SPEAKER が一覧にある場合は初期選択にする。なければ先頭を使う。
       voice_combobox = UIng::Combobox.new
-      selected_index = -1
-      styles.each_with_index do |style, i|
-        voice_combobox.append(style.label)
-        if style.speaker_id == DEFAULT_SPEAKER
-          voice_combobox.selected = i.to_i32
-          selected_index = i
-          selected_speaker = style.speaker_id
-        end
-      end
-      if selected_index < 0
-        voice_combobox.selected = 0
-        selected_speaker = styles.first.speaker_id
-      end
+      populate_voice_combobox(voice_combobox, styles, selected_speaker)
       voice_combobox.on_selected do |idx|
         next if idx < 0
         selected_speaker = styles[idx].speaker_id
       end
       form.append("声", voice_combobox)
+      voice_combobox.disable
 
       # VOICEVOX の speedScale は小数だが、UI では 50% から 200% の整数で扱う。
       speed_box = UIng::Box.new(:horizontal, padded: true)
@@ -76,6 +60,7 @@ module VOVX
       buttons = UIng::Box.new(:horizontal, padded: true)
       play_button = UIng::Button.new("再生")
       stop_button = UIng::Button.new("停止")
+      play_button.disable
       stop_button.disable
       buttons.append(play_button, true)
       buttons.append(stop_button, true)
@@ -91,6 +76,16 @@ module VOVX
         voice_combobox.disable
         speed_slider.disable
         status_label.text = "開始中..."
+
+        unless audio_ready
+          begin
+            Raudio::AudioDevice.init
+            audio_ready = Raudio::AudioDevice.ready?
+            log_event("audio_device.ready=#{audio_ready}")
+          rescue ex
+            log_event("audio_device.init_failed message=#{ex.message}")
+          end
+        end
 
         on_status = ->(message : String) { status_label.text = message }
         on_finish = ->(interrupted : Bool) {
@@ -123,6 +118,17 @@ module VOVX
       center_window_on_main_screen(window, WINDOW_WIDTH, WINDOW_HEIGHT)
       window.show
       focus_current_process
+
+      prepare_voicevox_engine(startup_context, window) do |loaded_styles, message|
+        status_label.text = message
+        unless loaded_styles.empty?
+          styles = loaded_styles
+          selected_speaker = populate_voice_combobox(voice_combobox, styles, selected_speaker)
+          voice_combobox.enable
+          play_button.enable
+        end
+      end
+
       UIng.timer(100) do
         focus_current_process
         0
@@ -131,9 +137,89 @@ module VOVX
     ensure
       UIng.uninit
       begin
-        Raudio::AudioDevice.close
-        log_event("audio_device.closed")
+        if audio_ready
+          Raudio::AudioDevice.close
+          log_event("audio_device.closed")
+        end
       rescue
+      end
+    end
+  end
+
+  private def self.populate_voice_combobox(voice_combobox : UIng::Combobox, styles : Array(VoiceStyleOption), current_speaker : Int32) : Int32
+    selected_speaker = current_speaker
+    voice_combobox.clear
+
+    selected_index = -1
+    styles.each_with_index do |style, i|
+      voice_combobox.append(style.label)
+      if style.speaker_id == current_speaker
+        selected_index = i
+        selected_speaker = style.speaker_id
+      end
+    end
+
+    if selected_index < 0
+      styles.each_with_index do |style, i|
+        if style.speaker_id == DEFAULT_SPEAKER
+          selected_index = i
+          selected_speaker = style.speaker_id
+          break
+        end
+      end
+    end
+
+    if selected_index < 0
+      selected_index = 0
+      selected_speaker = styles.first.speaker_id
+    end
+
+    voice_combobox.selected = selected_index.to_i32
+    selected_speaker
+  end
+
+  private def self.prepare_voicevox_engine(startup_context : Fiber::ExecutionContext::Parallel, window : UIng::Window, &on_ready : Array(VoiceStyleOption), String -> Nil) : Nil
+    startup_context.spawn(name: "vovx-startup") do
+      styles = [] of VoiceStyleOption
+      message = "待機中"
+
+      begin
+        unless voicevox_engine_running?
+          log_event("voicevox_engine.not_running")
+          if confirm_start_voicevox
+            log_event("voicevox_start.confirmed")
+            unless start_voicevox_application
+              message = "#{VOICEVOX_APP} を起動できませんでした"
+              log_event("voicevox_start.failed")
+            end
+
+            if message == "待機中"
+              if wait_for_voicevox_engine
+                log_event("voicevox_start.ready")
+              else
+                message = "VOICEVOX Engine の起動待ちに失敗しました"
+                log_event("voicevox_start.timeout")
+              end
+            end
+          else
+            message = "VOICEVOX Engine が起動していません"
+            log_event("voicevox_start.cancelled")
+          end
+        end
+
+        if message == "待機中"
+          styles = fetch_voice_styles
+        end
+      rescue ex
+        message = "VOICEVOX 準備失敗: #{ex.message}"
+        log_event("voicevox_start.prepare_failed message=#{ex.message}")
+      end
+
+      UIng.queue_main do
+        if styles.empty?
+          window.msg_box_error("VOVX", message)
+        end
+        on_ready.call(styles, message)
       end
     end
   end
