@@ -2,14 +2,38 @@ require "raudio"
 require "uing"
 
 module VOVX
+  private class AppState
+    property styles : Array(VoiceStyleOption)
+    property selected_speaker : Int32
+    property slider_percent : Int32
+    property? audio_ready = false
+    property? voicevox_ready = false
+
+    def initialize(@styles : Array(VoiceStyleOption), default_rate : Float64)
+      @selected_speaker = styles.first.speaker_id
+      @slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
+    end
+
+    def rate : Float64
+      slider_percent / 100.0
+    end
+  end
+
+  private record AppControls,
+    window : UIng::Window,
+    voice_combobox : UIng::Combobox,
+    speed_slider : UIng::Slider,
+    speed_label : UIng::Label,
+    status_label : UIng::Label,
+    play_button : UIng::Button,
+    stop_button : UIng::Button
+
   # 小さな操作ウィンドウを作り、声・速度・再生/停止を扱う。
   # 実際の合成と再生は PlaybackController に委譲する。
   def self.run_app(sentences : Array(String), initial_styles : Array(VoiceStyleOption), default_rate : Float64 = DEFAULT_RATE) : Nil
     log_event("app.run sentences=#{sentences.size} styles=#{initial_styles.size}")
 
-    styles = initial_styles
-    selected_speaker = styles.first.speaker_id
-    slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
+    state = AppState.new(initial_styles, default_rate)
 
     # macOS の AppKit 初期化と main loop は OS main thread で実行する必要がある。
     # Engine 起動確認や HTTP 取得は、この後で background context 側へ逃がす。
@@ -20,111 +44,11 @@ module VOVX
     begin
       controller = PlaybackController.new(sentences)
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
-      audio_ready = false
-      voicevox_ready = false
+      controls = build_app_controls(state)
+      window = controls.window
 
-      # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
-      window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
-      window.resizeable = false
+      wire_playback_controls(controls, state, controller, startup_context)
 
-      root = UIng::Box.new(:vertical, padded: true)
-      form = UIng::Form.new(padded: true)
-
-      # DEFAULT_SPEAKER が一覧にある場合は初期選択にする。なければ先頭を使う。
-      voice_combobox = UIng::Combobox.new
-      populate_voice_combobox(voice_combobox, styles, selected_speaker)
-      voice_combobox.on_selected do |idx|
-        next if idx < 0
-        selected_speaker = styles[idx].speaker_id
-      end
-      form.append("声", voice_combobox)
-      voice_combobox.disable
-
-      # VOICEVOX の speedScale は小数だが、UI では 50% から 200% の整数で扱う。
-      speed_box = UIng::Box.new(:horizontal, padded: true)
-      speed_slider = UIng::Slider.new(50, 200)
-      speed_slider.value = slider_percent
-      speed_label = UIng::Label.new("#{slider_percent}%")
-      speed_slider.on_changed do |value|
-        slider_percent = value
-        speed_label.text = "#{value}%"
-      end
-      speed_box.append(speed_slider, true)
-      speed_box.append(speed_label)
-      form.append("速度", speed_box)
-
-      root.append(form, true)
-
-      status_label = UIng::Label.new("待機中")
-      root.append(status_label)
-
-      buttons = UIng::Box.new(:horizontal, padded: true)
-      play_button = UIng::Button.new("再生")
-      stop_button = UIng::Button.new("停止")
-      play_button.disable
-      stop_button.disable
-      buttons.append(play_button, true)
-      buttons.append(stop_button, true)
-      root.append(buttons)
-
-      # 再生中は話者と速度を固定し、停止だけ受け付ける。
-      play_button.on_clicked do
-        unless voicevox_ready
-          play_button.disable
-          status_label.text = "VOICEVOX 起動中..."
-          prepare_voicevox_engine(startup_context, window, start_if_needed: true) do |loaded_styles, message, ready|
-            status_label.text = message
-            voicevox_ready = ready
-            if ready
-              styles = loaded_styles
-              selected_speaker = populate_voice_combobox(voice_combobox, styles, selected_speaker)
-              voice_combobox.enable
-              play_button.text = "再生"
-            end
-            play_button.enable
-          end
-          next
-        end
-
-        next if controller.running?
-
-        log_event("ui.play_clicked")
-        play_button.disable
-        stop_button.enable
-        voice_combobox.disable
-        speed_slider.disable
-        status_label.text = "開始中..."
-
-        unless audio_ready
-          begin
-            Raudio::AudioDevice.init
-            audio_ready = Raudio::AudioDevice.ready?
-            log_event("audio_device.ready=#{audio_ready}")
-          rescue ex
-            log_event("audio_device.init_failed message=#{ex.message}")
-          end
-        end
-
-        on_status = ->(message : String) { status_label.text = message }
-        on_finish = ->(interrupted : Bool) {
-          play_button.enable
-          stop_button.disable
-          voice_combobox.enable
-          speed_slider.enable
-          status_label.text = interrupted ? "停止しました" : "再生完了"
-        }
-        controller.start(selected_speaker, slider_percent / 100.0, on_status, on_finish)
-      end
-
-      stop_button.on_clicked do
-        next unless controller.running?
-
-        log_event("ui.stop_clicked")
-        status_label.text = "停止中..."
-        controller.request_stop
-      end
-
-      # ウィンドウを閉じる操作は停止要求として扱い、ワーカー側の後始末を走らせる。
       window.on_closing do
         log_event("ui.window_closing")
         controller.request_stop
@@ -132,25 +56,11 @@ module VOVX
         true
       end
 
-      window.child = root
       center_window_on_main_screen(window, WINDOW_WIDTH, WINDOW_HEIGHT)
       window.show
       focus_current_process
 
-      prepare_voicevox_engine(startup_context, window, start_if_needed: false) do |loaded_styles, message, ready|
-        status_label.text = message
-        voicevox_ready = ready
-        if ready
-          styles = loaded_styles
-          selected_speaker = populate_voice_combobox(voice_combobox, styles, selected_speaker)
-          voice_combobox.enable
-          play_button.text = "再生"
-          play_button.enable
-        else
-          play_button.text = "起動"
-          play_button.enable
-        end
-      end
+      prepare_voicevox_engine(controls, state, startup_context, start_if_needed: false)
 
       UIng.timer(100) do
         focus_current_process
@@ -160,7 +70,7 @@ module VOVX
     ensure
       UIng.uninit
       begin
-        if audio_ready
+        if state.audio_ready?
           Raudio::AudioDevice.close
           log_event("audio_device.closed")
         end
@@ -169,21 +79,126 @@ module VOVX
     end
   end
 
-  private def self.populate_voice_combobox(voice_combobox : UIng::Combobox, styles : Array(VoiceStyleOption), current_speaker : Int32) : Int32
-    selected_speaker = current_speaker
+  private def self.build_app_controls(state : AppState) : AppControls
+    # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
+    window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
+    window.resizeable = false
+
+    root = UIng::Box.new(:vertical, padded: true)
+    form = UIng::Form.new(padded: true)
+
+    voice_combobox = UIng::Combobox.new
+    populate_voice_combobox(voice_combobox, state)
+    voice_combobox.on_selected do |idx|
+      next if idx < 0
+      state.selected_speaker = state.styles[idx].speaker_id
+    end
+    form.append("声", voice_combobox)
+    voice_combobox.disable
+
+    speed_box = UIng::Box.new(:horizontal, padded: true)
+    speed_slider = UIng::Slider.new(50, 200)
+    speed_slider.value = state.slider_percent
+    speed_label = UIng::Label.new("#{state.slider_percent}%")
+    speed_slider.on_changed do |value|
+      state.slider_percent = value
+      speed_label.text = "#{value}%"
+    end
+    speed_box.append(speed_slider, true)
+    speed_box.append(speed_label)
+    form.append("速度", speed_box)
+    root.append(form, true)
+
+    status_label = UIng::Label.new("待機中")
+    root.append(status_label)
+
+    buttons = UIng::Box.new(:horizontal, padded: true)
+    play_button = UIng::Button.new("再生")
+    stop_button = UIng::Button.new("停止")
+    play_button.disable
+    stop_button.disable
+    buttons.append(play_button, true)
+    buttons.append(stop_button, true)
+    root.append(buttons)
+
+    window.child = root
+    AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
+  end
+
+  private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
+    controls.play_button.on_clicked do
+      unless state.voicevox_ready?
+        start_voicevox_from_ui(controls, state, startup_context)
+        next
+      end
+
+      next if controller.running?
+
+      start_playback(controls, state, controller)
+    end
+
+    controls.stop_button.on_clicked do
+      next unless controller.running?
+
+      log_event("ui.stop_clicked")
+      controls.status_label.text = "停止中..."
+      controller.request_stop
+    end
+  end
+
+  private def self.start_voicevox_from_ui(controls : AppControls, state : AppState, startup_context : Fiber::ExecutionContext::Parallel) : Nil
+    controls.play_button.disable
+    controls.status_label.text = "VOICEVOX 起動中..."
+    prepare_voicevox_engine(controls, state, startup_context, start_if_needed: true)
+  end
+
+  private def self.start_playback(controls : AppControls, state : AppState, controller : PlaybackController) : Nil
+    log_event("ui.play_clicked")
+    controls.play_button.disable
+    controls.stop_button.enable
+    controls.voice_combobox.disable
+    controls.speed_slider.disable
+    controls.status_label.text = "開始中..."
+
+    ensure_audio_device_ready(state)
+
+    on_status = ->(message : String) { controls.status_label.text = message }
+    on_finish = ->(interrupted : Bool) {
+      controls.play_button.enable
+      controls.stop_button.disable
+      controls.voice_combobox.enable
+      controls.speed_slider.enable
+      controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+    }
+    controller.start(state.selected_speaker, state.rate, on_status, on_finish)
+  end
+
+  private def self.ensure_audio_device_ready(state : AppState) : Nil
+    return if state.audio_ready?
+
+    Raudio::AudioDevice.init
+    state.audio_ready = Raudio::AudioDevice.ready?
+    log_event("audio_device.ready=#{state.audio_ready?}")
+  rescue ex
+    log_event("audio_device.init_failed message=#{ex.message}")
+  end
+
+  private def self.populate_voice_combobox(voice_combobox : UIng::Combobox, state : AppState) : Nil
     voice_combobox.clear
 
     selected_index = -1
-    styles.each_with_index do |style, i|
+    selected_speaker = state.selected_speaker
+
+    state.styles.each_with_index do |style, i|
       voice_combobox.append(style.label)
-      if style.speaker_id == current_speaker
+      if style.speaker_id == state.selected_speaker
         selected_index = i
         selected_speaker = style.speaker_id
       end
     end
 
     if selected_index < 0
-      styles.each_with_index do |style, i|
+      state.styles.each_with_index do |style, i|
         if style.speaker_id == DEFAULT_SPEAKER
           selected_index = i
           selected_speaker = style.speaker_id
@@ -194,14 +209,30 @@ module VOVX
 
     if selected_index < 0
       selected_index = 0
-      selected_speaker = styles.first.speaker_id
+      selected_speaker = state.styles.first.speaker_id
     end
 
+    state.selected_speaker = selected_speaker
     voice_combobox.selected = selected_index.to_i32
-    selected_speaker
   end
 
-  private def self.prepare_voicevox_engine(startup_context : Fiber::ExecutionContext::Parallel, window : UIng::Window, start_if_needed : Bool, &on_ready : Array(VoiceStyleOption), String, Bool -> Nil) : Nil
+  private def self.apply_voicevox_status(controls : AppControls, state : AppState, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
+    controls.status_label.text = message
+    state.voicevox_ready = ready
+
+    if ready
+      state.styles = styles
+      populate_voice_combobox(controls.voice_combobox, state)
+      controls.voice_combobox.enable
+      controls.play_button.text = "再生"
+    else
+      controls.play_button.text = "起動"
+    end
+
+    controls.play_button.enable
+  end
+
+  private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil
     startup_context.spawn(name: "vovx-startup") do
       styles = [] of VoiceStyleOption
       message = "待機中"
@@ -242,9 +273,9 @@ module VOVX
 
       UIng.queue_main do
         if styles.empty? && start_if_needed
-          window.msg_box_error("VOVX", message)
+          controls.window.msg_box_error("VOVX", message)
         end
-        on_ready.call(styles, message, ready)
+        apply_voicevox_status(controls, state, styles, message, ready)
       end
     end
   end
