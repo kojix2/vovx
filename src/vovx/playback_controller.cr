@@ -18,6 +18,13 @@ module VOVX
     def initialize(@sentences : Array(String))
     end
 
+    def replace_sentences(sentences : Array(String)) : Nil
+      @mutex.synchronize do
+        @sentences = sentences
+      end
+      VOVX.log_event("playback.sentences_replaced sentences=#{sentences.size}")
+    end
+
     def running? : Bool
       @mutex.synchronize { @running }
     end
@@ -45,25 +52,27 @@ module VOVX
     # 再生処理を開始する。すでに実行中の場合は false を返す。
     # on_status/on_finish は必ず UIng.queue_main 経由で呼び、UI 更新をメインスレッドに戻す。
     def start(speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Bool
-      @mutex.synchronize do
+      sentences = @mutex.synchronize do
         return false if @running
         @running = true
         @stop_requested = false
+        @sentences.dup
       end
-      VOVX.log_event("playback.start speaker=#{speaker_id} rate=#{rate} sentences=#{@sentences.size}")
+      sentence_count = sentences.size
+      VOVX.log_event("playback.start speaker=#{speaker_id} rate=#{rate} sentences=#{sentence_count}")
 
       work_queue = Channel(File).new(2)
       @mutex.synchronize { @work_queue = work_queue }
 
       begin
-        spawn_producer(work_queue, speaker_id, rate, on_status)
+        spawn_producer(work_queue, sentences, speaker_id, rate, on_status)
       rescue ex
         fail_start("producer.spawn_failed message=#{ex.message}", on_status, on_finish)
         return true
       end
 
       begin
-        spawn_consumer(work_queue, on_status, on_finish)
+        spawn_consumer(work_queue, sentence_count, on_status, on_finish)
       rescue ex
         fail_start("consumer.spawn_failed message=#{ex.message}", on_status, on_finish)
         return true
@@ -74,21 +83,21 @@ module VOVX
 
     # producer: 文ごとに WAV を合成し、再生側へ渡す。
     # バッファを小さくして、停止要求後に作り過ぎた一時ファイルが残りにくいようにする。
-    private def spawn_producer(work_queue : Channel(File), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil)) : Nil
+    private def spawn_producer(work_queue : Channel(File), sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil)) : Nil
       VOVX.log_event("producer.spawn")
       @synthesis_context.spawn(name: "vovx-synth-producer") do
         begin
-          @sentences.each_with_index do |sentence, i|
+          sentences.each_with_index do |sentence, i|
             break if stop_requested?
 
-            queue_status(on_status, "合成中 #{i + 1}/#{@sentences.size}")
+            queue_status(on_status, "合成中 #{i + 1}/#{sentences.size}")
             VOVX.log_event("producer.sentence index=#{i + 1}")
 
             wav = begin
               VOVX.synthesize(sentence, speaker_id, rate)
             rescue ex
               VOVX.log_event("producer.error index=#{i + 1} message=#{ex.message}")
-              queue_status(on_status, "合成失敗 #{i + 1}/#{@sentences.size}: #{ex.message}")
+              queue_status(on_status, "合成失敗 #{i + 1}/#{sentences.size}: #{ex.message}")
               next
             end
 
@@ -112,7 +121,7 @@ module VOVX
     end
 
     # consumer: 合成済み WAV を受け取り、1 件ずつ再生して削除する。
-    private def spawn_consumer(work_queue : Channel(File), on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
+    private def spawn_consumer(work_queue : Channel(File), sentence_count : Int32, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
       VOVX.log_event("consumer.spawn")
       @playback_context.spawn(name: "vovx-playback-consumer") do
         interrupted = false
@@ -131,7 +140,7 @@ module VOVX
                 break
               end
 
-              queue_status(on_status, "再生中 #{played}/#{@sentences.size}")
+              queue_status(on_status, "再生中 #{played}/#{sentence_count}")
               VOVX.log_event("consumer.play index=#{played} path=#{wav.path}")
               play_wav(wav.path)
             ensure

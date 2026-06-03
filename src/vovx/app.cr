@@ -46,12 +46,16 @@ module VOVX
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
       controls = build_app_controls(state)
       window = controls.window
+      instance_server = start_instance_server do |text|
+        handle_instance_text(text, controls, state, controller)
+      end
 
       wire_playback_controls(controls, state, controller, startup_context)
 
       window.on_closing do
         log_event("ui.window_closing")
         controller.request_stop
+        stop_instance_server(instance_server)
         UIng.quit
         true
       end
@@ -68,6 +72,7 @@ module VOVX
       end
       UIng.main
     ensure
+      stop_instance_server(instance_server)
       UIng.uninit
       begin
         if state.audio_ready?
@@ -123,6 +128,30 @@ module VOVX
 
     window.child = root
     AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
+  end
+
+  private def self.handle_instance_text(text : String, controls : AppControls, state : AppState, controller : PlaybackController) : Nil
+    sentences = split_sentences(text)
+    if sentences.empty?
+      log_event("instance.input_empty")
+      return
+    end
+
+    UIng.queue_main do
+      if controller.running?
+        controls.status_label.text = "停止中..."
+        controller.request_stop
+      end
+
+      controller.replace_sentences(sentences)
+      controls.stop_button.disable
+      controls.voice_combobox.enable if state.voicevox_ready?
+      controls.speed_slider.enable
+      controls.play_button.enable
+      controls.status_label.text = "新しい入力を受け取りました"
+      controls.window.show
+      focus_current_process
+    end
   end
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil

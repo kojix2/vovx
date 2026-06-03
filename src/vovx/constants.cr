@@ -7,6 +7,8 @@ module VOVX
   DEFAULT_RATE    = 1.5
   WINDOW_WIDTH    = 240
   WINDOW_HEIGHT   = 120
+  SOCKET_USER     = ENV["USER"]? || "user"
+  SOCKET_PATH     = ENV["VOVX_SOCKET"]? || File.join("/tmp", "vovx-#{SOCKET_USER}.sock")
 
   # ログは実行ファイルの隣に置く。
   # 開発中や調査時は VOVX_LOG で任意の出力先へ逃がせる。
