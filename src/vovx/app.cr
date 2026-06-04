@@ -72,7 +72,11 @@ module VOVX
       window.show
       focus_current_process
 
-      prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: false)
+      if state.sentences.empty?
+        controls.status_label.text = "Quick Action をインストールできます"
+      else
+        prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: false)
+      end
 
       UIng.timer(100) do
         focus_current_process
@@ -138,10 +142,27 @@ module VOVX
   end
 
   private def self.build_app_menu : Nil
+    app_menu = UIng::Menu.new("VOVX")
+    app_menu.append_item("Quick Action をインストール").on_clicked do |window|
+      install_quick_action_from_ui(window)
+    end
+
     help_menu = UIng::Menu.new("Help")
     about_item = help_menu.append_about_item
     about_item.on_clicked do |window|
       window.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
+    end
+  end
+
+  private def self.install_quick_action_from_ui(window : UIng::Window) : Nil
+    result = install_quick_action
+    if result.installed
+      window.msg_box(
+        "VOVX",
+        "Quick Action をインストールしました。\nシステム設定の キーボード > キーボードショートカット > サービス で確認できます。"
+      )
+    else
+      window.msg_box_error("VOVX", result.message)
     end
   end
 
@@ -173,6 +194,8 @@ module VOVX
   end
 
   private def self.start_playback(controls : AppControls, state : AppState, controller : PlaybackController) : Nil
+    return if state.sentences.empty?
+
     log_event("ui.play_clicked")
     controls.play_button.disable
     controls.stop_button.enable

@@ -1,6 +1,41 @@
 require "uing"
+require "file_utils"
+require "ecr/macros"
 
 module VOVX
+  record QuickActionInstallResult, installed : Bool, message : String
+
+  # Automator Quick Action をユーザーの Services フォルダへインストールする。
+  def self.install_quick_action : QuickActionInstallResult
+    {% unless flag?(:darwin) %}
+      return QuickActionInstallResult.new(false, "Quick Action のインストールは macOS のみ対応しています。")
+    {% end %}
+
+    executable_path = Process.executable_path
+    unless executable_path
+      return QuickActionInstallResult.new(false, "実行ファイルの場所を取得できませんでした。")
+    end
+
+    home = ENV["HOME"]?
+    if home.nil? || home.empty?
+      return QuickActionInstallResult.new(false, "HOME が設定されていないためインストール先を決定できませんでした。")
+    end
+
+    workflow_dir = File.join(home, "Library", "Services", "#{QUICK_ACTION_NAME}.workflow")
+    contents_dir = File.join(workflow_dir, "Contents")
+    FileUtils.mkdir_p(contents_dir)
+
+    File.write(File.join(contents_dir, "Info.plist"), quick_action_info_plist)
+    File.write(File.join(contents_dir, "document.wflow"), quick_action_document_wflow(executable_path))
+    refresh_services_menu
+
+    log_event("quick_action.installed path=#{workflow_dir} executable=#{executable_path}")
+    QuickActionInstallResult.new(true, workflow_dir)
+  rescue ex
+    log_event("quick_action.install_failed message=#{ex.message}")
+    QuickActionInstallResult.new(false, "Quick Action のインストールに失敗しました: #{ex.message}")
+  end
+
   # OS ごとの標準的な方法で VOICEVOX アプリを起動する。
   def self.start_voicevox_application : Bool
     {% if flag?(:darwin) %}
@@ -200,5 +235,41 @@ module VOVX
     Process.run("osascript", ["-e", script], output: Process::Redirect::Close, error: Process::Redirect::Close)
   rescue
     # 前面化できない環境でも、ウィンドウ自体は通常通り表示できる。
+  end
+
+  private def self.refresh_services_menu : Nil
+    {% unless flag?(:darwin) %}
+      return
+    {% end %}
+
+    pbs = "/System/Library/CoreServices/pbs"
+    return unless File.exists?(pbs)
+
+    Process.run(pbs, ["-flush"], output: Process::Redirect::Close, error: Process::Redirect::Close)
+  rescue ex
+    log_event("quick_action.refresh_failed message=#{ex.message}")
+  end
+
+  private def self.quick_action_info_plist : String
+    quick_action_name = QUICK_ACTION_NAME
+    ECR.render "src/vovx/templates/quick_action_info.plist.ecr"
+  end
+
+  private def self.quick_action_document_wflow(executable_path : String) : String
+    command = "export LANG=ja_JP.UTF-8\nexport LC_ALL=ja_JP.UTF-8\n#{shell_single_quote(executable_path)}"
+    ECR.render "src/vovx/templates/quick_action_document.wflow.ecr"
+  end
+
+  private def self.xml_escape(value : String) : String
+    value
+      .gsub("&", "&amp;")
+      .gsub("<", "&lt;")
+      .gsub(">", "&gt;")
+      .gsub("\"", "&quot;")
+      .gsub("'", "&apos;")
+  end
+
+  private def self.shell_single_quote(value : String) : String
+    "'#{value.gsub("'", "'\\''")}'"
   end
 end

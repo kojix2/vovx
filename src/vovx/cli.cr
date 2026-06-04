@@ -15,9 +15,7 @@ module VOVX
     end
 
     if sentences.empty?
-      error.puts "No input text."
       log_event("input.empty")
-      exit
     end
 
     run_app(sentences, [default_voice_style])
