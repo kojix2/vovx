@@ -173,6 +173,7 @@ module VOVX
 
       unless interrupted
         log_event("ui.quit_after_playback")
+        controls.window.destroy
         UIng.quit
       end
     }
