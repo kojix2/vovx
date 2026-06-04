@@ -3,14 +3,14 @@ require "uing"
 
 module VOVX
   private class AppState
+    property sentences : Array(String)
     property styles : Array(VoiceStyleOption)
     property selected_speaker : Int32
     property slider_percent : Int32
     property? audio_ready = false
     property? voicevox_ready = false
-    property? pending_autoplay = false
 
-    def initialize(@styles : Array(VoiceStyleOption), default_rate : Float64)
+    def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64)
       @selected_speaker = styles.first.speaker_id
       @slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
     end
@@ -34,7 +34,7 @@ module VOVX
   def self.run_app(sentences : Array(String), initial_styles : Array(VoiceStyleOption), default_rate : Float64 = DEFAULT_RATE) : Nil
     log_event("app.run sentences=#{sentences.size} styles=#{initial_styles.size}")
 
-    state = AppState.new(initial_styles, default_rate)
+    state = AppState.new(sentences, initial_styles, default_rate)
 
     # macOS の AppKit 初期化と main loop は OS main thread で実行する必要がある。
     # Engine 起動確認や HTTP 取得は、この後で background context 側へ逃がす。
@@ -43,20 +43,16 @@ module VOVX
     log_event("ui.init.done")
 
     begin
-      controller = PlaybackController.new(sentences)
+      controller = PlaybackController.new
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
       controls = build_app_controls(state)
       window = controls.window
-      instance_server = start_instance_server do |text|
-        handle_instance_text(text, controls, state, controller)
-      end
 
       wire_playback_controls(controls, state, controller, startup_context)
 
       window.on_closing do
         log_event("ui.window_closing")
         controller.request_stop
-        stop_instance_server(instance_server)
         UIng.quit
         true
       end
@@ -73,7 +69,6 @@ module VOVX
       end
       UIng.main
     ensure
-      stop_instance_server(instance_server)
       UIng.uninit
       begin
         if state.audio_ready?
@@ -131,35 +126,6 @@ module VOVX
     AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
   end
 
-  private def self.handle_instance_text(text : String, controls : AppControls, state : AppState, controller : PlaybackController) : Nil
-    sentences = split_sentences(text)
-    if sentences.empty?
-      log_event("instance.input_empty")
-      return
-    end
-
-    UIng.queue_main do
-      controller.replace_sentences(sentences)
-      state.pending_autoplay = true
-
-      if controller.running?
-        controls.status_label.text = "停止中..."
-        controller.request_stop
-      elsif state.voicevox_ready?
-        state.pending_autoplay = false
-        start_playback(controls, state, controller)
-      else
-        controls.stop_button.disable
-        controls.speed_slider.enable
-        controls.play_button.enable
-        controls.status_label.text = "新しい入力を受け取りました"
-      end
-
-      controls.window.show
-      focus_current_process
-    end
-  end
-
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
     controls.play_button.on_clicked do
       unless state.voicevox_ready?
@@ -199,18 +165,18 @@ module VOVX
 
     on_status = ->(message : String) { controls.status_label.text = message }
     on_finish = ->(interrupted : Bool) {
-      if interrupted && state.pending_autoplay? && state.voicevox_ready?
-        state.pending_autoplay = false
-        start_playback(controls, state, controller)
-      else
-        controls.play_button.enable
-        controls.stop_button.disable
-        controls.voice_combobox.enable
-        controls.speed_slider.enable
-        controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+      controls.play_button.enable
+      controls.stop_button.disable
+      controls.voice_combobox.enable
+      controls.speed_slider.enable
+      controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+
+      unless interrupted
+        log_event("ui.quit_after_playback")
+        UIng.quit
       end
     }
-    controller.start(state.selected_speaker, state.rate, on_status, on_finish)
+    controller.start(state.sentences, state.selected_speaker, state.rate, on_status, on_finish)
   end
 
   private def self.ensure_audio_device_ready(state : AppState) : Nil
@@ -270,11 +236,6 @@ module VOVX
     end
 
     controls.play_button.enable
-
-    if ready && state.pending_autoplay?
-      state.pending_autoplay = false
-      start_playback(controls, state, controller)
-    end
   end
 
   private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil

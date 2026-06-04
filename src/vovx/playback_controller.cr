@@ -15,14 +15,7 @@ module VOVX
     @synthesis_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-synth", 1)
     @playback_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-playback", 1)
 
-    def initialize(@sentences : Array(String))
-    end
-
-    def replace_sentences(sentences : Array(String)) : Nil
-      @mutex.synchronize do
-        @sentences = sentences
-      end
-      VOVX.log_event("playback.sentences_replaced sentences=#{sentences.size}")
+    def initialize
     end
 
     def running? : Bool
@@ -51,21 +44,21 @@ module VOVX
 
     # 再生処理を開始する。すでに実行中の場合は false を返す。
     # on_status/on_finish は必ず UIng.queue_main 経由で呼び、UI 更新をメインスレッドに戻す。
-    def start(speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Bool
-      sentences = @mutex.synchronize do
+    def start(sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Bool
+      playback_sentences = @mutex.synchronize do
         return false if @running
         @running = true
         @stop_requested = false
-        @sentences.dup
+        sentences.dup
       end
-      sentence_count = sentences.size
+      sentence_count = playback_sentences.size
       VOVX.log_event("playback.start speaker=#{speaker_id} rate=#{rate} sentences=#{sentence_count}")
 
       work_queue = Channel(File).new(2)
       @mutex.synchronize { @work_queue = work_queue }
 
       begin
-        spawn_producer(work_queue, sentences, speaker_id, rate, on_status)
+        spawn_producer(work_queue, playback_sentences, speaker_id, rate, on_status)
       rescue ex
         fail_start("producer.spawn_failed message=#{ex.message}", on_status, on_finish)
         return true

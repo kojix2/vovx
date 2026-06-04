@@ -20,8 +20,6 @@ module VOVX
       exit
     end
 
-    return if forward_to_running_instance(text)
-
     run_app(sentences, [default_voice_style])
   end
 
