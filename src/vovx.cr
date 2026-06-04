@@ -8,3 +8,7 @@ require "./vovx/macos"
 require "./vovx/playback_controller"
 require "./vovx/app"
 require "./vovx/cli"
+
+module VOVX
+  VERSION = {{ `shards version #{__DIR__}`.chomp.stringify }}
+end

@@ -54,6 +54,7 @@ module VOVX
     begin
       controller = PlaybackController.new
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
+      build_app_menu
       controls = build_app_controls(state)
       window = controls.window
 
@@ -134,6 +135,14 @@ module VOVX
 
     window.child = root
     AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
+  end
+
+  private def self.build_app_menu : Nil
+    help_menu = UIng::Menu.new("Help")
+    about_item = help_menu.append_about_item
+    about_item.on_clicked do |window|
+      window.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
+    end
   end
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
