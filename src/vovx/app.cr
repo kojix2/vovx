@@ -9,14 +9,23 @@ module VOVX
     property slider_percent : Int32
     property? audio_ready = false
     property? voicevox_ready = false
+    property preferred_speaker : Int32?
 
-    def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64)
-      @selected_speaker = styles.first.speaker_id
-      @slider_percent = (default_rate * 100).round.to_i.clamp(50, 200)
+    def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64, settings : UserSettings)
+      @preferred_speaker = settings.speaker_id
+      @selected_speaker = settings.speaker_id || styles.first.speaker_id
+      @slider_percent = ((settings.rate || default_rate) * 100).round.to_i.clamp(50, 200)
     end
 
     def rate : Float64
       slider_percent / 100.0
+    end
+
+    def to_user_settings : UserSettings
+      UserSettings.new(
+        speaker_id: selected_speaker,
+        rate: rate
+      )
     end
   end
 
@@ -34,7 +43,7 @@ module VOVX
   def self.run_app(sentences : Array(String), initial_styles : Array(VoiceStyleOption), default_rate : Float64 = DEFAULT_RATE) : Nil
     log_event("app.run sentences=#{sentences.size} styles=#{initial_styles.size}")
 
-    state = AppState.new(sentences, initial_styles, default_rate)
+    state = AppState.new(sentences, initial_styles, default_rate, load_user_settings)
 
     # macOS の AppKit 初期化と main loop は OS main thread で実行する必要がある。
     # Engine 起動確認や HTTP 取得は、この後で background context 側へ逃がす。
@@ -52,6 +61,7 @@ module VOVX
 
       window.on_closing do
         log_event("ui.window_closing")
+        save_user_settings(state.to_user_settings)
         controller.request_stop
         UIng.quit
         true
@@ -173,6 +183,7 @@ module VOVX
 
       unless interrupted
         log_event("ui.quit_after_playback")
+        save_user_settings(state.to_user_settings)
         controls.window.destroy
         UIng.quit
       end
@@ -194,11 +205,12 @@ module VOVX
     voice_combobox.clear
 
     selected_index = -1
+    target_speaker = state.preferred_speaker || state.selected_speaker
     selected_speaker = state.selected_speaker
 
     state.styles.each_with_index do |style, i|
       voice_combobox.append(style.label)
-      if style.speaker_id == state.selected_speaker
+      if style.speaker_id == target_speaker
         selected_index = i
         selected_speaker = style.speaker_id
       end
@@ -220,6 +232,7 @@ module VOVX
     end
 
     state.selected_speaker = selected_speaker
+    state.preferred_speaker = nil if selected_speaker == target_speaker
     voice_combobox.selected = selected_index.to_i32
   end
 

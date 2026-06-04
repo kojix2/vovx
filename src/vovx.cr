@@ -1,5 +1,6 @@
 require "./vovx/constants"
 require "./vovx/logger"
+require "./vovx/settings"
 require "./vovx/text"
 require "./vovx/voice_style_option"
 require "./vovx/voicevox_client"
