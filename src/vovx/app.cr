@@ -13,6 +13,7 @@ module VOVX
     property? auto_play_started = false
     property? quit_after_playback : Bool
     property preferred_speaker : Int32?
+    property settings_window : UIng::Window?
 
     def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64, settings : UserSettings)
       @preferred_speaker = settings.speaker_id
@@ -20,6 +21,7 @@ module VOVX
       @slider_percent = ((settings.rate || default_rate) * 100).round.to_i.clamp(50, 200)
       @auto_play = settings.auto_play?
       @quit_after_playback = settings.quit_after_playback?
+      @settings_window = nil
     end
 
     def rate : Float64
@@ -70,6 +72,7 @@ module VOVX
       window.on_closing do
         log_event("ui.window_closing")
         save_user_settings(state.to_user_settings)
+        close_settings_window(state)
         controller.request_stop
         UIng.quit
         true
@@ -87,6 +90,7 @@ module VOVX
       end
       UIng.main
     ensure
+      close_settings_window(state)
       UIng.uninit
       begin
         if state.audio_ready?
@@ -159,8 +163,14 @@ module VOVX
   end
 
   private def self.show_settings_window(state : AppState) : Nil
+    if window = state.settings_window
+      window.show unless window.released?
+      return
+    end
+
     window = UIng::Window.new("設定", 360, 130, margined: true)
     window.resizeable = false
+    state.settings_window = window
 
     root = UIng::Box.new(:vertical, padded: true)
 
@@ -183,10 +193,21 @@ module VOVX
     window.child = root
     window.on_closing do
       save_user_settings(state.to_user_settings)
+      state.settings_window = nil
       true
     end
     center_window_on_main_screen(window, 360, 130)
     window.show
+  end
+
+  private def self.close_settings_window(state : AppState) : Nil
+    window = state.settings_window
+    return if window.nil?
+
+    state.settings_window = nil
+    window.destroy unless window.released?
+  rescue ex
+    log_event("ui.settings_window_close_failed message=#{ex.message}")
   end
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
@@ -237,6 +258,7 @@ module VOVX
       if !interrupted && state.quit_after_playback?
         log_event("ui.quit_after_playback")
         save_user_settings(state.to_user_settings)
+        close_settings_window(state)
         controls.window.destroy
         UIng.quit
       end
