@@ -100,7 +100,7 @@ module VOVX
 
   private def self.build_app_controls(state : AppState) : AppControls
     # VOICEVOX をパイプで呼ぶ用途なので、入力欄は持たず、再生操作だけに絞る。
-    window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, margined: true)
+    window = UIng::Window.new("VOICEVOX 再生", WINDOW_WIDTH, WINDOW_HEIGHT, menubar: true, margined: true)
     window.resizeable = false
 
     root = UIng::Box.new(:vertical, padded: true)
