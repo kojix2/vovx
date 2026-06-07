@@ -9,11 +9,13 @@ describe VOVX::UserSettings do
     it "saves and loads speaker and rate" do
       path = settings_spec_path
 
-      VOVX.save_user_settings(VOVX::UserSettings.new(speaker_id: 3, rate: 1.25), path)
+      VOVX.save_user_settings(VOVX::UserSettings.new(speaker_id: 3, rate: 1.25, auto_play: true, quit_after_playback: false), path)
       settings = VOVX.load_user_settings(path)
 
       settings.speaker_id.should eq(3)
       settings.rate.should eq(1.25)
+      settings.auto_play?.should be_true
+      settings.quit_after_playback?.should be_false
     ensure
       File.delete?(path) if path
       Dir.delete?(File.dirname(path)) if path && Dir.exists?(File.dirname(path))
@@ -28,6 +30,8 @@ describe VOVX::UserSettings do
 
       settings.speaker_id.should be_nil
       settings.rate.should be_nil
+      settings.auto_play?.should be_false
+      settings.quit_after_playback?.should be_true
     ensure
       File.delete?(path) if path
       Dir.delete?(File.dirname(path)) if path && Dir.exists?(File.dirname(path))
@@ -39,6 +43,20 @@ describe VOVX::UserSettings do
       File.write(path, %({"speaker_id":1,"rate":9.0}))
 
       VOVX.load_user_settings(path).rate.should eq(2.0)
+    ensure
+      File.delete?(path) if path
+      Dir.delete?(File.dirname(path)) if path && Dir.exists?(File.dirname(path))
+    end
+
+    it "keeps previous playback completion behavior for older settings files" do
+      path = settings_spec_path
+      Dir.mkdir_p(File.dirname(path))
+      File.write(path, %({"speaker_id":1,"rate":1.0}))
+
+      settings = VOVX.load_user_settings(path)
+
+      settings.auto_play?.should be_false
+      settings.quit_after_playback?.should be_true
     ensure
       File.delete?(path) if path
       Dir.delete?(File.dirname(path)) if path && Dir.exists?(File.dirname(path))

@@ -6,7 +6,7 @@ shards:
 
   raudio:
     git: https://github.com/kojix2/raudio.cr.git
-    version: 0.1.1
+    version: 0.1.3
 
   uing:
     git: https://github.com/kojix2/uing.git

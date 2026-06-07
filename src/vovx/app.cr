@@ -9,12 +9,17 @@ module VOVX
     property slider_percent : Int32
     property? audio_ready = false
     property? voicevox_ready = false
+    property? auto_play : Bool
+    property? auto_play_started = false
+    property? quit_after_playback : Bool
     property preferred_speaker : Int32?
 
     def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64, settings : UserSettings)
       @preferred_speaker = settings.speaker_id
       @selected_speaker = settings.speaker_id || styles.first.speaker_id
       @slider_percent = ((settings.rate || default_rate) * 100).round.to_i.clamp(50, 200)
+      @auto_play = settings.auto_play?
+      @quit_after_playback = settings.quit_after_playback?
     end
 
     def rate : Float64
@@ -24,7 +29,9 @@ module VOVX
     def to_user_settings : UserSettings
       UserSettings.new(
         speaker_id: selected_speaker,
-        rate: rate
+        rate: rate,
+        auto_play: auto_play?,
+        quit_after_playback: quit_after_playback?
       )
     end
   end
@@ -54,7 +61,7 @@ module VOVX
     begin
       controller = PlaybackController.new
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
-      build_app_menu
+      build_app_menu(state)
       controls = build_app_controls(state)
       window = controls.window
 
@@ -72,7 +79,7 @@ module VOVX
       window.show
       focus_current_process
 
-      prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: false)
+      prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: state.auto_play?)
 
       UIng.timer(100) do
         focus_current_process
@@ -137,12 +144,49 @@ module VOVX
     AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
   end
 
-  private def self.build_app_menu : Nil
+  private def self.build_app_menu(state : AppState) : Nil
+    app_menu = UIng::Menu.new("VOVX")
+    settings_item = app_menu.append_preferences_item
+    settings_item.on_clicked do
+      show_settings_window(state)
+    end
+
     help_menu = UIng::Menu.new("Help")
     about_item = help_menu.append_about_item
     about_item.on_clicked do |window|
       window.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
     end
+  end
+
+  private def self.show_settings_window(state : AppState) : Nil
+    window = UIng::Window.new("設定", 360, 130, margined: true)
+    window.resizeable = false
+
+    root = UIng::Box.new(:vertical, padded: true)
+
+    auto_play_checkbox = UIng::Checkbox.new("自動的に再生する")
+    auto_play_checkbox.checked = state.auto_play?
+    auto_play_checkbox.on_toggled do |checked|
+      state.auto_play = checked
+      save_user_settings(state.to_user_settings)
+    end
+    root.append(auto_play_checkbox)
+
+    quit_after_playback_checkbox = UIng::Checkbox.new("再生が終わったら終了する")
+    quit_after_playback_checkbox.checked = state.quit_after_playback?
+    quit_after_playback_checkbox.on_toggled do |checked|
+      state.quit_after_playback = checked
+      save_user_settings(state.to_user_settings)
+    end
+    root.append(quit_after_playback_checkbox)
+
+    window.child = root
+    window.on_closing do
+      save_user_settings(state.to_user_settings)
+      true
+    end
+    center_window_on_main_screen(window, 360, 130)
+    window.show
   end
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
@@ -190,7 +234,7 @@ module VOVX
       controls.speed_slider.enable
       controls.status_label.text = interrupted ? "停止しました" : "再生完了"
 
-      unless interrupted
+      if !interrupted && state.quit_after_playback?
         log_event("ui.quit_after_playback")
         save_user_settings(state.to_user_settings)
         controls.window.destroy
@@ -313,7 +357,19 @@ module VOVX
           controls.window.msg_box_error("VOVX", message)
         end
         apply_voicevox_status(controls, state, controller, styles, message, ready)
+        start_auto_playback_if_ready(controls, state, controller, ready)
       end
     end
+  end
+
+  private def self.start_auto_playback_if_ready(controls : AppControls, state : AppState, controller : PlaybackController, ready : Bool) : Nil
+    return unless auto_playback_ready?(state, ready)
+
+    state.auto_play_started = true
+    start_playback(controls, state, controller)
+  end
+
+  private def self.auto_playback_ready?(state : AppState, ready : Bool) : Bool
+    ready && state.auto_play? && !state.auto_play_started?
   end
 end
