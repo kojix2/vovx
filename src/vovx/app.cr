@@ -149,8 +149,8 @@ module VOVX
   end
 
   private def self.build_app_menu(state : AppState) : Nil
-    app_menu = UIng::Menu.new("VOVX")
-    settings_item = app_menu.append_preferences_item
+    settings_menu = UIng::Menu.new("Settings")
+    settings_item = settings_menu.append_preferences_item
     settings_item.on_clicked do
       show_settings_window(state)
     end
