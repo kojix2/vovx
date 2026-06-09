@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="VOVX icon">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="80" x2="944" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B6DDBD"/>
+      <stop offset="1" stop-color="#9DCEA6"/>
+    </linearGradient>
+
+    <linearGradient id="shell" x1="180" y1="180" x2="820" y2="980" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F9F9F9"/>
+      <stop offset="1" stop-color="#EDEDED"/>
+    </linearGradient>
+
+    <linearGradient id="visor" x1="286" y1="315" x2="738" y2="499" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A4541"/>
+      <stop offset="1" stop-color="#0C5B53"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Head -->
+  <rect x="202" y="194" width="620" height="390" rx="190" fill="url(#shell)"/>
+
+  <!-- Visor -->
+  <rect x="286" y="315" width="452" height="184" rx="92" fill="url(#visor)"/>
+
+  <!-- Wave bars: perfectly centered -->
+  <g fill="#C7E6CC">
+    <rect x="392" y="370" width="32" height="60"  rx="16"/>
+    <rect x="444" y="345" width="32" height="110" rx="16"/>
+    <rect x="496" y="325" width="32" height="146" rx="16"/>
+    <rect x="548" y="345" width="32" height="110" rx="16"/>
+    <rect x="600" y="370" width="32" height="60"  rx="16"/>
+  </g>
+
+  <!-- Neck -->
+  <rect x="434" y="584" width="156" height="62" rx="10" fill="#E6E6E6"/>
+
+  <!-- Body -->
+  <rect x="190" y="646" width="644" height="330" rx="108" fill="url(#shell)"/>
+
+  <!-- Arm: moved inward so the hand no longer touches the border -->
+  <path d="M 792 754 C 860 754, 886 716, 886 654" fill="none" stroke="#EFEFEF" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Simplified hand / claw: also moved inward -->
+  <path d="M 884 627 A 48 48 0 1 1 884 717" fill="none" stroke="#EFEFEF" stroke-width="36" stroke-linecap="round"/>
+
+  <!-- Chest V: moved slightly upward -->
+  <path d="M 385 776 L 510 901 L 639 776" fill="none" stroke="#9DCEA6" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

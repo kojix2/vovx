@@ -20,6 +20,7 @@ PLIST_PATH="$APP_BUNDLE/Contents/Info.plist"
 
 ICON_NAME="app_icon"
 ICON_PNG="resources/$ICON_NAME.png"
+ICON_SVG="resources/$ICON_NAME.svg"
 ICON_ICNS="resources/$ICON_NAME.icns"
 
 ARCH="${ARCH:-$(uname -m)}"
@@ -86,6 +87,35 @@ is_bundle_internal_ref() {
 
 ensure_writable() {
   chmod u+w "$1" 2>/dev/null || true
+}
+
+render_svg_to_png() {
+  local svg="$1"
+  local out_png="$2"
+  local ql_out
+
+  if command -v qlmanage >/dev/null 2>&1; then
+    qlmanage -t -s 1024 -o "$TMP_DIR" "$svg" >/dev/null 2>&1 || true
+    ql_out="$TMP_DIR/$(basename "$svg").png"
+    if [ -f "$ql_out" ]; then
+      mv "$ql_out" "$out_png"
+      return 0
+    fi
+  fi
+
+  if command -v rsvg-convert >/dev/null 2>&1; then
+    if rsvg-convert -w 1024 -h 1024 "$svg" -o "$out_png" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  if command -v inkscape >/dev/null 2>&1; then
+    if inkscape "$svg" --export-type=png --export-filename="$out_png" -w 1024 -h 1024 >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 copy_lib_into_frameworks() {
@@ -223,24 +253,40 @@ validate_bundle() {
 }
 
 generate_icon() {
-  if [ ! -f "$ICON_PNG" ]; then
+  local source_png="$ICON_PNG"
+  local temp_png=""
+
+  if [ ! -f "$source_png" ] && [ -f "$ICON_SVG" ]; then
+    temp_png="$TMP_DIR/${ICON_NAME}.png"
+
+    log "Rendering $ICON_SVG..."
+    if render_svg_to_png "$ICON_SVG" "$temp_png"; then
+      source_png="$temp_png"
+    else
+      echo "ERROR: $ICON_PNG not found, and failed to render $ICON_SVG." >&2
+      echo "Install one of: qlmanage (macOS), rsvg-convert, inkscape." >&2
+      exit 1
+    fi
+  fi
+
+  if [ ! -f "$source_png" ]; then
     return
   fi
 
-  log "Generating $ICON_ICNS from $ICON_PNG..."
+  log "Generating $ICON_ICNS from $source_png..."
   local iconset_dir="resources/$ICON_NAME.iconset"
   mkdir -p "$iconset_dir"
 
-  sips -z 16   16   "$ICON_PNG" --out "$iconset_dir/icon_16x16.png" >/dev/null
-  sips -z 32   32   "$ICON_PNG" --out "$iconset_dir/icon_16x16@2x.png" >/dev/null
-  sips -z 32   32   "$ICON_PNG" --out "$iconset_dir/icon_32x32.png" >/dev/null
-  sips -z 64   64   "$ICON_PNG" --out "$iconset_dir/icon_32x32@2x.png" >/dev/null
-  sips -z 128  128  "$ICON_PNG" --out "$iconset_dir/icon_128x128.png" >/dev/null
-  sips -z 256  256  "$ICON_PNG" --out "$iconset_dir/icon_128x128@2x.png" >/dev/null
-  sips -z 256  256  "$ICON_PNG" --out "$iconset_dir/icon_256x256.png" >/dev/null
-  sips -z 512  512  "$ICON_PNG" --out "$iconset_dir/icon_256x256@2x.png" >/dev/null
-  sips -z 512  512  "$ICON_PNG" --out "$iconset_dir/icon_512x512.png" >/dev/null
-  sips -z 1024 1024 "$ICON_PNG" --out "$iconset_dir/icon_512x512@2x.png" >/dev/null
+  sips -z 16   16   "$source_png" --out "$iconset_dir/icon_16x16.png" >/dev/null
+  sips -z 32   32   "$source_png" --out "$iconset_dir/icon_16x16@2x.png" >/dev/null
+  sips -z 32   32   "$source_png" --out "$iconset_dir/icon_32x32.png" >/dev/null
+  sips -z 64   64   "$source_png" --out "$iconset_dir/icon_32x32@2x.png" >/dev/null
+  sips -z 128  128  "$source_png" --out "$iconset_dir/icon_128x128.png" >/dev/null
+  sips -z 256  256  "$source_png" --out "$iconset_dir/icon_128x128@2x.png" >/dev/null
+  sips -z 256  256  "$source_png" --out "$iconset_dir/icon_256x256.png" >/dev/null
+  sips -z 512  512  "$source_png" --out "$iconset_dir/icon_256x256@2x.png" >/dev/null
+  sips -z 512  512  "$source_png" --out "$iconset_dir/icon_512x512.png" >/dev/null
+  sips -z 1024 1024 "$source_png" --out "$iconset_dir/icon_512x512@2x.png" >/dev/null
 
   iconutil -c icns "$iconset_dir" -o "$ICON_ICNS"
   rm -rf "$iconset_dir"
