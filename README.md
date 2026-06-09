@@ -1,5 +1,7 @@
 # VOVX
 
+<img src="resources/app_icon.svg" alt="VOVX logo" width="140" />
+
 標準入力のテキストを [VOICEVOX](https://voicevox.hiroshiba.jp/) で音声合成し、簡単な GUI で再生する Crystal 製ツールです。
 macOS の「サービス」>「アクション」から呼び出すことを想定しています。
 句点、感嘆符、疑問符、改行で文章を分割し、音声の生成と再生を一文ずつ行います。再生中に次の音声を合成するため、途切れにくい読み上げができます。
