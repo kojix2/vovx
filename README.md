@@ -1,6 +1,9 @@
+<img src="resources/app_icon.svg" alt="VOVX logo" width="140" />
+
 # VOVX
 
-<img src="resources/app_icon.svg" alt="VOVX logo" width="140" />
+[![build](https://github.com/kojix2/vovx/actions/workflows/build.yml/badge.svg)](https://github.com/kojix2/vovx/actions/workflows/build.yml)
+[![Lines of Code](https://img.shields.io/endpoint?url=https%3A%2F%2Ftokei.kojix2.net%2Fbadge%2Fgithub%2Fkojix2%2Fvovx%2Flines)](https://tokei.kojix2.net/github/kojix2/vovx)
 
 標準入力のテキストを [VOICEVOX](https://voicevox.hiroshiba.jp/) で音声合成し、簡単な GUI で再生する Crystal 製ツールです。
 macOS の「サービス」>「アクション」から呼び出すことを想定しています。
