@@ -8,7 +8,9 @@ module VOVX
     sentences = split_sentences(text)
     log_event("input.received chars=#{text.size} sentences=#{sentences.size} log_path=#{LOG_PATH}")
 
-    if sentences.empty?
+    # macOS ではサービスメニューから選択テキストを stdin で受け取る。
+    # Linux ではサービスメニューの代替として、空の stdin ならクリップボードを読む。
+    if sentences.empty? && {% if flag?(:darwin) %} false {% else %} true {% end %}
       text = clipboard_text
       sentences = split_sentences(text)
       log_event("input.clipboard chars=#{text.size} sentences=#{sentences.size}")
