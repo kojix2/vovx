@@ -132,7 +132,7 @@ module VOVX
     form.append("速度", speed_box)
     root.append(form, true)
 
-    status_label = UIng::Label.new("待機中")
+    status_label = UIng::Label.new(state.sentences.empty? ? "入力テキストなし" : "待機中")
     root.append(status_label)
 
     buttons = UIng::Box.new(:horizontal, padded: true)
@@ -264,6 +264,11 @@ module VOVX
   end
 
   private def self.start_playback(controls : AppControls, state : AppState, controller : PlaybackController) : Nil
+    if state.sentences.empty?
+      controls.status_label.text = "入力テキストなし"
+      return
+    end
+
     log_event("ui.play_clicked")
     controls.play_button.disable
     controls.stop_button.enable
@@ -338,7 +343,7 @@ module VOVX
   end
 
   private def self.apply_voicevox_status(controls : AppControls, state : AppState, controller : PlaybackController, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
-    controls.status_label.text = message
+    controls.status_label.text = ready && state.sentences.empty? ? "入力テキストなし" : message
     state.voicevox_ready = ready
 
     if ready
@@ -350,7 +355,11 @@ module VOVX
       controls.play_button.text = "起動"
     end
 
-    controls.play_button.enable
+    if ready && state.sentences.empty?
+      controls.play_button.disable
+    else
+      controls.play_button.enable
+    end
   end
 
   private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil
@@ -418,6 +427,6 @@ module VOVX
   end
 
   private def self.auto_playback_ready?(state : AppState, ready : Bool) : Bool
-    ready && state.auto_play? && !state.auto_play_started?
+    ready && state.auto_play? && !state.auto_play_started? && !state.sentences.empty?
   end
 end
