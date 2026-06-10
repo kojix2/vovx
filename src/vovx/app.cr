@@ -80,7 +80,6 @@ module VOVX
 
       center_window_on_main_screen(window, WINDOW_WIDTH, WINDOW_HEIGHT)
       window.show
-      focus_current_process
 
       prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: state.auto_play?)
 

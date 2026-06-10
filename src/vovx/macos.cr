@@ -4,6 +4,28 @@ require "file_utils"
 module VOVX
   SERVICE_WORKFLOW_NAME = "VOVX.workflow"
 
+  {% if flag?(:darwin) %}
+    lib CoreGraphics
+      struct CGPoint
+        x : LibC::Double
+        y : LibC::Double
+      end
+
+      struct CGSize
+        width : LibC::Double
+        height : LibC::Double
+      end
+
+      struct CGRect
+        origin : CGPoint
+        size : CGSize
+      end
+
+      fun main_display_id = CGMainDisplayID : UInt32
+      fun display_bounds = CGDisplayBounds(display : UInt32) : CGRect
+    end
+  {% end %}
+
   # OS ごとの標準的な方法で VOICEVOX アプリを起動する。
   def self.start_voicevox_application : Bool
     {% if flag?(:darwin) %}
@@ -152,32 +174,19 @@ module VOVX
     false
   end
 
-  # macOS のデスクトップ境界を AppleScript で取得する。
-  # 失敗時は nil を返し、呼び出し側は中央寄せを諦めて通常表示へ戻す。
+  # macOS のメインディスプレイ境界を CoreGraphics で取得する。
+  # AppKit の main loop 前に Crystal の main fiber をブロックしないよう、外部プロセスは使わない。
   def self.macos_screen_bounds : {Int32, Int32, Int32, Int32}?
     {% unless flag?(:darwin) %}
       return nil
+    {% else %}
+      bounds = CoreGraphics.display_bounds(CoreGraphics.main_display_id)
+      left = bounds.origin.x.to_i
+      top = bounds.origin.y.to_i
+      right = (bounds.origin.x + bounds.size.width).to_i
+      bottom = (bounds.origin.y + bounds.size.height).to_i
+      {left, top, right, bottom}
     {% end %}
-
-    output = IO::Memory.new
-    status = Process.run(
-      "osascript",
-      ["-e", "tell application \"Finder\" to get bounds of window of desktop"],
-      output: output,
-      error: Process::Redirect::Close
-    )
-    return unless status.success?
-
-    parts = output.to_s.strip.split(",").map(&.strip)
-    return unless parts.size == 4
-
-    left = parts[0].to_i?
-    top = parts[1].to_i?
-    right = parts[2].to_i?
-    bottom = parts[3].to_i?
-    return if left.nil? || top.nil? || right.nil? || bottom.nil?
-
-    {left, top, right, bottom}
   rescue
     nil
   end
@@ -200,7 +209,14 @@ module VOVX
     {% end %}
 
     script = "tell application \"System Events\" to tell (first process whose unix id is #{Process.pid}) to set frontmost to true"
-    Process.run("osascript", ["-e", script], output: Process::Redirect::Close, error: Process::Redirect::Close)
+    process = Process.new(
+      "osascript",
+      ["-e", script],
+      input: Process::Redirect::Close,
+      output: Process::Redirect::Close,
+      error: Process::Redirect::Close
+    )
+    process.close
   rescue
     # 前面化できない環境でも、ウィンドウ自体は通常通り表示できる。
   end
