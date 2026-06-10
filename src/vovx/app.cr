@@ -149,11 +149,37 @@ module VOVX
   end
 
   private def self.build_app_menu(state : AppState) : Nil
-    settings_menu = UIng::Menu.new("Settings")
-    settings_item = settings_menu.append_preferences_item
+    tools_menu = UIng::Menu.new("Tools")
+    settings_item = tools_menu.append_preferences_item
     settings_item.on_clicked do
       show_settings_window(state)
     end
+
+    {% if flag?(:darwin) %}
+      tools_menu.append_separator
+      tools_menu.append_item("サービスメニューに追加/更新").on_clicked do |window|
+        success, message = install_service_workflow
+        if success
+          window.msg_box("VOVX", message)
+        else
+          window.msg_box_error("VOVX", message)
+        end
+      end
+      tools_menu.append_item("サービスメニューから削除").on_clicked do |window|
+        success, message = uninstall_service_workflow
+        if success
+          window.msg_box("VOVX", message)
+        else
+          window.msg_box_error("VOVX", message)
+        end
+      end
+      tools_menu.append_item("サービスメニューのフォルダを開く").on_clicked do |window|
+        success, message = open_service_workflow_directory
+        unless success
+          window.msg_box_error("VOVX", message)
+        end
+      end
+    {% end %}
 
     help_menu = UIng::Menu.new("Help")
     about_item = help_menu.append_about_item

@@ -22,6 +22,8 @@ ICON_NAME="app_icon"
 ICON_PNG="resources/$ICON_NAME.png"
 ICON_SVG="resources/$ICON_NAME.svg"
 ICON_ICNS="resources/$ICON_NAME.icns"
+SERVICE_WORKFLOW_NAME="VOVX.workflow"
+SERVICE_WORKFLOW_SOURCE="resources/macos/$SERVICE_WORKFLOW_NAME"
 
 ARCH="${ARCH:-$(uname -m)}"
 DMG_NAME="${APP_NAME}_${VERSION}_${ARCH}.dmg"
@@ -374,6 +376,9 @@ chmod +x "$MACOS_DIR/$APP_NAME"
 generate_icon
 if [ -f "$ICON_ICNS" ]; then
   cp "$ICON_ICNS" "$RESOURCES_DIR/$ICON_NAME.icns"
+fi
+if [ -d "$SERVICE_WORKFLOW_SOURCE" ]; then
+  cp -R "$SERVICE_WORKFLOW_SOURCE" "$RESOURCES_DIR/"
 fi
 
 write_plist
