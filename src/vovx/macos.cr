@@ -282,17 +282,14 @@ module VOVX
   end
 
   private def self.service_workflow_source_path : String
-    bundled_path = File.expand_path(File.join("..", "Resources", SERVICE_WORKFLOW_NAME), EXEC_DIR)
+    bundled_path = Paths.bundled_resource_path(SERVICE_WORKFLOW_NAME)
     return bundled_path if Dir.exists?(bundled_path)
 
-    File.join(Dir.current, "resources", "macos", SERVICE_WORKFLOW_NAME)
+    Paths.development_resource_path("macos", SERVICE_WORKFLOW_NAME)
   end
 
   private def self.service_workflow_directory_path : String
-    home = ENV["HOME"]?
-    raise "HOME is not set" if home.nil?
-
-    File.join(home, "Library", "Services")
+    Paths.macos_services_dir
   end
 
   private def self.service_workflow_destination_path : String

@@ -1,4 +1,5 @@
 require "./vovx/constants"
+require "./vovx/paths"
 require "./vovx/logger"
 require "./vovx/settings"
 require "./vovx/text"

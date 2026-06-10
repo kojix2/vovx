@@ -21,25 +21,11 @@ module VOVX
   end
 
   def self.settings_path : String
-    if path = ENV["VOVX_CONFIG"]?
-      return path unless path.empty?
-    end
-
-    File.join(settings_dir, "config.json")
+    Paths.settings_path
   end
 
   def self.settings_dir : String
-    home = ENV["HOME"]? || Dir.current
-
-    {% if flag?(:darwin) %}
-      File.join(home, "Library", "Application Support", "vovx")
-    {% else %}
-      if xdg_config_home = ENV["XDG_CONFIG_HOME"]?
-        return File.join(xdg_config_home, "vovx") unless xdg_config_home.empty?
-      end
-
-      File.join(home, ".config", "vovx")
-    {% end %}
+    Paths.config_dir
   end
 
   def self.load_user_settings(path : String = settings_path) : UserSettings

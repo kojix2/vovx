@@ -1,9 +1,12 @@
 require "log"
 
 module VOVX
+  LOG_PATH = Paths.log_path
+
   # GUI アプリでは標準エラーが見えないことが多いので、通常はファイルへログを残す。
   # ファイルを開けない環境でもアプリ本体は動くように STDERR へフォールバックする。
   LOG_IO = begin
+    Dir.mkdir_p(File.dirname(LOG_PATH))
     File.open(LOG_PATH, "a")
   rescue
     STDERR
