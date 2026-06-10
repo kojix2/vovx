@@ -59,10 +59,7 @@
         <key>ActionParameters</key>
         <dict>
           <key>COMMAND_STRING</key>
-          <string>APP_PATH=$(/usr/bin/osascript -e 'POSIX path of (path to application id "com.kojix2.vovx")' 2&gt;/dev/null)
-
-for candidate in \
-  "$APP_PATH" \
+          <string>for candidate in \
   "/Applications/VOVX.app" \
   "$HOME/Applications/VOVX.app"
 do
