@@ -10,11 +10,9 @@ module VOVX
 
     getter? stop_requested = false
 
-    @process : Process?
     @pid : Int32?
 
     def initialize
-      @process = nil
       @pid = nil
     end
 
@@ -41,23 +39,22 @@ module VOVX
       process.input.print(payload)
       process.input.close
 
-      @process = process
       @pid = process.pid.to_i32
       @stop_requested = false
       VOVX.log_event("worker.start pid=#{@pid} path=#{helper}")
       true
     rescue ex
       VOVX.log_event("worker.start_failed message=#{ex.message}")
-      cleanup_process
+      @pid = nil
       false
     end
 
     def request_stop : Nil
-      return unless process = @process
+      return unless pid = @pid
 
       @stop_requested = true
-      VOVX.log_event("worker.stop_requested pid=#{@pid}")
-      process.terminate(graceful: true)
+      VOVX.log_event("worker.stop_requested pid=#{pid}")
+      Process.signal(Signal::TERM, pid)
     rescue ex
       VOVX.log_event("worker.stop_failed message=#{ex.message}")
     end
@@ -74,24 +71,13 @@ module VOVX
         Result::Running
       when pid
         VOVX.log_event("worker.finished pid=#{pid} status=#{status}")
-        cleanup_process
+        @pid = nil
         stop_requested? || status != 0 ? Result::Interrupted : Result::Finished
       else
         VOVX.log_event("worker.waitpid_failed pid=#{pid}")
-        cleanup_process
+        @pid = nil
         Result::Interrupted
       end
-    end
-
-    private def cleanup_process : Nil
-      @process.try &.close
-      @process = nil
-      @pid = nil
-    rescue ex
-      VOVX.log_event("worker.cleanup_failed message=#{ex.message}")
-    ensure
-      @process = nil
-      @pid = nil
     end
 
     private def worker_executable_path : String
@@ -107,11 +93,7 @@ module VOVX
     end
 
     private def executable_file?(path : String) : Bool
-      info = File.info?(path)
-      return false if info.nil? || !info.type.file?
-
-      permissions = info.permissions
-      permissions.owner_execute? || permissions.group_execute? || permissions.other_execute?
+      File.info?(path).try(&.type.file?) || false
     end
   end
 end
