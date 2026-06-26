@@ -1,6 +1,6 @@
 .PHONY: build spec test run clean
 
-CRYSTAL_FLAGS =
+CRYSTAL_FLAGS = -Dpreview_mt -Dexecution_context
 BUILD_FLAGS =
 
 ifeq ($(release),1)
@@ -23,4 +23,4 @@ run: build
 	bin/vovx
 
 clean:
-	rm -f bin/vovx bin/vovx-worker
+	rm -f bin/vovx

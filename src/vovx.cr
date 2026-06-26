@@ -6,7 +6,7 @@ require "./vovx/text"
 require "./vovx/voice_style_option"
 require "./vovx/voicevox_client"
 require "./vovx/macos"
-require "./vovx/worker_playback_process"
+require "./vovx/playback_controller"
 require "./vovx/app"
 require "./vovx/cli"
 
