@@ -1,4 +1,3 @@
-require "raudio"
 require "uing"
 
 module VOVX
@@ -7,7 +6,6 @@ module VOVX
     property styles : Array(VoiceStyleOption)
     property selected_speaker : Int32
     property slider_percent : Int32
-    property? audio_ready = false
     property? voicevox_ready = false
     property? auto_play : Bool
     property? auto_play_started = false
@@ -61,13 +59,12 @@ module VOVX
     log_event("ui.init.done")
 
     begin
-      controller = PlaybackController.new
-      startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
+      controller = WorkerPlaybackProcess.new
       build_app_menu(state)
       controls = build_app_controls(state)
       window = controls.window
 
-      wire_playback_controls(controls, state, controller, startup_context)
+      wire_playback_controls(controls, state, controller)
 
       window.on_closing do
         log_event("ui.window_closing")
@@ -81,7 +78,7 @@ module VOVX
       center_window_on_main_screen(window, WINDOW_WIDTH, WINDOW_HEIGHT)
       window.show
 
-      prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: state.auto_play?)
+      prepare_voicevox_engine(controls, state, controller, start_if_needed: state.auto_play?)
 
       UIng.timer(100) do
         focus_current_process
@@ -91,13 +88,6 @@ module VOVX
     ensure
       close_settings_window(state)
       UIng.uninit
-      begin
-        if state.audio_ready?
-          Raudio::AudioDevice.close
-          log_event("audio_device.closed")
-        end
-      rescue
-      end
     end
   end
 
@@ -235,10 +225,10 @@ module VOVX
     log_event("ui.settings_window_close_failed message=#{ex.message}")
   end
 
-  private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
+  private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess) : Nil
     controls.play_button.on_clicked do
       unless state.voicevox_ready?
-        start_voicevox_from_ui(controls, state, controller, startup_context)
+        start_voicevox_from_ui(controls, state, controller)
         next
       end
 
@@ -256,13 +246,13 @@ module VOVX
     end
   end
 
-  private def self.start_voicevox_from_ui(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
+  private def self.start_voicevox_from_ui(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess) : Nil
     controls.play_button.disable
     controls.status_label.text = "VOICEVOX 起動中..."
-    prepare_voicevox_engine(controls, state, controller, startup_context, start_if_needed: true)
+    prepare_voicevox_engine(controls, state, controller, start_if_needed: true)
   end
 
-  private def self.start_playback(controls : AppControls, state : AppState, controller : PlaybackController) : Nil
+  private def self.start_playback(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess) : Nil
     if state.sentences.empty?
       controls.status_label.text = "入力テキストなし"
       return
@@ -275,35 +265,45 @@ module VOVX
     controls.speed_slider.disable
     controls.status_label.text = "開始中..."
 
-    ensure_audio_device_ready(state)
-
-    on_status = ->(message : String) { controls.status_label.text = message }
-    on_finish = ->(interrupted : Bool) {
+    unless controller.start(state.sentences, state.selected_speaker, state.rate)
       controls.play_button.enable
       controls.stop_button.disable
       controls.voice_combobox.enable
       controls.speed_slider.enable
-      controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+      controls.status_label.text = "再生開始に失敗しました"
+      return
+    end
 
-      if !interrupted && state.quit_after_playback?
-        log_event("ui.quit_after_playback")
-        save_user_settings(state.to_user_settings)
-        close_settings_window(state)
-        controls.window.destroy
-        UIng.quit
+    controls.status_label.text = "再生中..."
+    UIng.timer(200) do
+      case controller.poll
+      when WorkerPlaybackProcess::Result::Running
+        1
+      when WorkerPlaybackProcess::Result::Finished
+        finish_playback_from_ui(controls, state, interrupted: false)
+        0
+      when WorkerPlaybackProcess::Result::Interrupted
+        finish_playback_from_ui(controls, state, interrupted: true)
+        0
+      else
+        0
       end
-    }
-    controller.start(state.sentences, state.selected_speaker, state.rate, on_status, on_finish)
+    end
   end
 
-  private def self.ensure_audio_device_ready(state : AppState) : Nil
-    return if state.audio_ready?
+  private def self.finish_playback_from_ui(controls : AppControls, state : AppState, interrupted : Bool) : Nil
+    controls.play_button.enable
+    controls.stop_button.disable
+    controls.voice_combobox.enable
+    controls.speed_slider.enable
+    controls.status_label.text = interrupted ? "停止しました" : "再生完了"
 
-    Raudio::AudioDevice.init
-    state.audio_ready = Raudio::AudioDevice.ready?
-    log_event("audio_device.ready=#{state.audio_ready?}")
-  rescue ex
-    log_event("audio_device.init_failed message=#{ex.message}")
+    if !interrupted && state.quit_after_playback?
+      log_event("ui.quit_after_playback")
+      save_user_settings(state.to_user_settings)
+      close_settings_window(state)
+      UIng.quit
+    end
   end
 
   private def self.populate_voice_combobox(voice_combobox : UIng::Combobox, state : AppState) : Nil
@@ -341,7 +341,7 @@ module VOVX
     voice_combobox.selected = selected_index.to_i32
   end
 
-  private def self.apply_voicevox_status(controls : AppControls, state : AppState, controller : PlaybackController, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
+  private def self.apply_voicevox_status(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
     controls.status_label.text = ready && state.sentences.empty? ? "入力テキストなし" : message
     state.voicevox_ready = ready
 
@@ -361,64 +361,58 @@ module VOVX
     end
   end
 
-  private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel, start_if_needed : Bool) : Nil
-    startup_context.spawn(name: "vovx-startup") do
-      styles = [] of VoiceStyleOption
-      message = "待機中"
-      ready = false
-      can_fetch_styles = true
+  private def self.prepare_voicevox_engine(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess, start_if_needed : Bool) : Nil
+    styles = [] of VoiceStyleOption
+    message = "待機中"
+    ready = false
+    can_fetch_styles = true
 
-      begin
-        unless voicevox_engine_running?
-          log_event("voicevox_engine.not_running")
-          if start_if_needed
-            log_event("voicevox_start.requested")
-            unless start_voicevox_application
-              message = "#{VOICEVOX_APP} を起動できませんでした"
-              can_fetch_styles = false
-              log_event("voicevox_start.failed")
-            end
-
-            if can_fetch_styles
-              if wait_for_voicevox_engine(on_attempt: ->(attempt : Int32, max_attempts : Int32) {
-                   UIng.queue_main do
-                     controls.status_label.text = "VOICEVOX 起動中... #{attempt}/#{max_attempts}"
-                   end
-                 })
-                log_event("voicevox_start.ready")
-              else
-                message = "VOICEVOX Engine の起動待ちに失敗しました"
-                can_fetch_styles = false
-                log_event("voicevox_start.timeout")
-              end
-            end
-          else
-            message = "VOICEVOX Engine が起動していません"
+    begin
+      unless voicevox_engine_running?
+        log_event("voicevox_engine.not_running")
+        if start_if_needed
+          log_event("voicevox_start.requested")
+          unless start_voicevox_application
+            message = "#{VOICEVOX_APP} を起動できませんでした"
             can_fetch_styles = false
+            log_event("voicevox_start.failed")
           end
-        end
 
-        if can_fetch_styles
-          styles = fetch_voice_styles
-          ready = true
-          message = "待機中"
+          if can_fetch_styles
+            if wait_for_voicevox_engine(on_attempt: ->(attempt : Int32, max_attempts : Int32) {
+                 controls.status_label.text = "VOICEVOX 起動中... #{attempt}/#{max_attempts}"
+               })
+              log_event("voicevox_start.ready")
+            else
+              message = "VOICEVOX Engine の起動待ちに失敗しました"
+              can_fetch_styles = false
+              log_event("voicevox_start.timeout")
+            end
+          end
+        else
+          message = "VOICEVOX Engine が起動していません"
+          can_fetch_styles = false
         end
-      rescue ex
-        message = "VOICEVOX 準備失敗: #{ex.message}"
-        log_event("voicevox_start.prepare_failed message=#{ex.message}")
       end
 
-      UIng.queue_main do
-        if styles.empty? && start_if_needed
-          controls.window.msg_box_error("VOVX", message)
-        end
-        apply_voicevox_status(controls, state, controller, styles, message, ready)
-        start_auto_playback_if_ready(controls, state, controller, ready)
+      if can_fetch_styles
+        styles = fetch_voice_styles
+        ready = true
+        message = "待機中"
       end
+    rescue ex
+      message = "VOICEVOX 準備失敗: #{ex.message}"
+      log_event("voicevox_start.prepare_failed message=#{ex.message}")
     end
+
+    if styles.empty? && start_if_needed
+      controls.window.msg_box_error("VOVX", message)
+    end
+    apply_voicevox_status(controls, state, controller, styles, message, ready)
+    start_auto_playback_if_ready(controls, state, controller, ready)
   end
 
-  private def self.start_auto_playback_if_ready(controls : AppControls, state : AppState, controller : PlaybackController, ready : Bool) : Nil
+  private def self.start_auto_playback_if_ready(controls : AppControls, state : AppState, controller : WorkerPlaybackProcess, ready : Bool) : Nil
     return unless auto_playback_ready?(state, ready)
 
     state.auto_play_started = true

@@ -7,6 +7,8 @@ authors:
 targets:
   vovx:
     main: src/vovx/main.cr
+  vovx-worker:
+    main: src/vovx/worker_main.cr
 
 dependencies:
   uing:

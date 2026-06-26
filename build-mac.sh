@@ -12,6 +12,7 @@ BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.kojix2.vovx}"
 : "${VERSION:?VERSION could not be detected from shard.yml}"
 
 EXECUTABLE_PATH="bin/$APP_NAME"
+WORKER_EXECUTABLE_PATH="bin/$APP_NAME-worker"
 APP_BUNDLE="$APP_DISPLAY_NAME.app"
 MACOS_DIR="$APP_BUNDLE/Contents/MacOS"
 RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
@@ -356,7 +357,7 @@ create_dmg() {
 log "Building $APP_DISPLAY_NAME v$VERSION..."
 shards install
 
-build_args=(-Dpreview_mt -Dexecution_context --release --link-flags "-Wl,-headerpad_max_install_names")
+build_args=(--release --link-flags "-Wl,-headerpad_max_install_names")
 if [ -n "${CRFLAGS:-}" ]; then
   # shellcheck disable=SC2206
   build_args+=($CRFLAGS)
@@ -372,6 +373,8 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR" "$DIST_DIR"
 
 cp "$EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
+cp "$WORKER_EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME-worker"
+chmod +x "$MACOS_DIR/$APP_NAME-worker"
 
 generate_icon
 if [ -f "$ICON_ICNS" ]; then
@@ -387,6 +390,7 @@ write_plist
 # Recursive dependency bundling
 # ------------------------------------------------------------
 scan_and_bundle_binary "$MACOS_DIR/$APP_NAME" "executable"
+scan_and_bundle_binary "$MACOS_DIR/$APP_NAME-worker" "executable"
 validate_bundle
 ad_hoc_sign
 
