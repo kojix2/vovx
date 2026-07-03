@@ -2,11 +2,11 @@ version: 2.0
 shards:
   easyclip:
     git: https://github.com/kojix2/easyclip.git
-    version: 0.1.3
+    version: 0.2.0
 
   raudio:
     git: https://github.com/kojix2/raudio.cr.git
-    version: 0.1.3
+    version: 0.1.4
 
   uing:
     git: https://github.com/kojix2/uing.git
