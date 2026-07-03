@@ -90,6 +90,10 @@ module VOVX
       UIng.main
     ensure
       close_settings_window(state)
+      # uiUninit traps if a root uiWindow is still allocated.
+      if main_window = window
+        main_window.destroy unless main_window.released?
+      end
       UIng.uninit
       begin
         if state.audio_ready?
