@@ -2,6 +2,8 @@
 /lib/
 /bin/
 /dist/
+/dmg_stage/
+/VOVX.app/
 /.shards/
 *.dwarf
 resources/app_icon.icns
