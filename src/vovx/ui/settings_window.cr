@@ -1,4 +1,5 @@
 require "uing"
+require "../platform/screen"
 
 module VOVX
   private def self.show_settings_window(state : AppState) : Nil

@@ -1,5 +1,6 @@
 require "raudio"
 require "uing"
+require "./platform/screen"
 require "./ui/app_state"
 require "./ui/settings_window"
 require "./ui/voicevox_startup"

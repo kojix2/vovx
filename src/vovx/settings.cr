@@ -13,7 +13,7 @@ module VOVX
       after_initialize
     end
 
-    def after_initialize
+    protected def after_initialize
       @rate = VOVX.normalize_rate(@rate)
     end
   end

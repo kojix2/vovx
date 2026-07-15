@@ -1,5 +1,6 @@
 require "raudio"
 require "uing"
+require "../service_workflow"
 
 module VOVX
   private def self.build_app_controls(state : AppState) : AppControls
