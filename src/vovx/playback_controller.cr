@@ -15,9 +15,6 @@ module VOVX
     @synthesis_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-synth", 1)
     @playback_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-playback", 1)
 
-    def initialize
-    end
-
     def running? : Bool
       @mutex.synchronize { @running }
     end

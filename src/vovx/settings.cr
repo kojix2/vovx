@@ -24,10 +24,6 @@ module VOVX
     Paths.settings_path
   end
 
-  def self.settings_dir : String
-    Paths.config_dir
-  end
-
   def self.load_user_settings(path : String = settings_path) : UserSettings
     return UserSettings.new unless File.exists?(path)
 

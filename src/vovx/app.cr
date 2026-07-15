@@ -13,7 +13,7 @@ module VOVX
     property? auto_play_started = false
     property? quit_after_playback : Bool
     property preferred_speaker : Int32?
-    property settings_window : UIng::Window?
+    property settings_window : UIng::Window? = nil
 
     def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64, settings : UserSettings)
       @preferred_speaker = settings.speaker_id
@@ -21,7 +21,6 @@ module VOVX
       @slider_percent = ((settings.rate || default_rate) * 100).round.to_i.clamp(50, 200)
       @auto_play = settings.auto_play?
       @quit_after_playback = settings.quit_after_playback?
-      @settings_window = nil
     end
 
     def rate : Float64
@@ -345,7 +344,7 @@ module VOVX
     voice_combobox.selected = selected_index.to_i32
   end
 
-  private def self.apply_voicevox_status(controls : AppControls, state : AppState, controller : PlaybackController, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
+  private def self.apply_voicevox_status(controls : AppControls, state : AppState, styles : Array(VoiceStyleOption), message : String, ready : Bool) : Nil
     controls.status_label.text = ready && state.sentences.empty? ? "入力テキストなし" : message
     state.voicevox_ready = ready
 
@@ -416,7 +415,7 @@ module VOVX
         if styles.empty? && start_if_needed
           controls.window.msg_box_error("VOVX", message)
         end
-        apply_voicevox_status(controls, state, controller, styles, message, ready)
+        apply_voicevox_status(controls, state, styles, message, ready)
         start_auto_playback_if_ready(controls, state, controller, ready)
       end
     end
