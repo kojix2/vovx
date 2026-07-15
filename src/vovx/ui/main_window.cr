@@ -49,11 +49,15 @@ module VOVX
     AppControls.new(window, voice_combobox, speed_slider, speed_label, status_label, play_button, stop_button)
   end
 
-  private def self.build_app_menu(state : AppState) : Nil
+  private def self.build_app_menu(state : AppState, controller : PlaybackController, exporter : AudioExporter, controls : Proc(AppControls)) : Nil
     tools_menu = UIng::Menu.new("Tools")
     settings_item = tools_menu.append_preferences_item
     settings_item.on_clicked do
       show_settings_window(state)
+    end
+
+    tools_menu.append_item("音声を保存...").on_clicked do |window|
+      start_audio_export_from_ui(window, controls.call, state, controller, exporter)
     end
 
     {% if flag?(:darwin) %}
@@ -87,6 +91,62 @@ module VOVX
     about_item.on_clicked do |window|
       window.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
     end
+  end
+
+  private def self.start_audio_export_from_ui(window : UIng::Window, controls : AppControls, state : AppState, controller : PlaybackController, exporter : AudioExporter) : Nil
+    unless state.voicevox_ready?
+      window.msg_box_error("VOVX", "VOICEVOX Engine が起動していません")
+      return
+    end
+
+    if state.sentences.empty?
+      window.msg_box("VOVX", "保存するテキストがありません")
+      return
+    end
+
+    if controller.running?
+      window.msg_box("VOVX", "再生中は保存できません")
+      return
+    end
+
+    if exporter.running?
+      window.msg_box("VOVX", "すでに保存中です")
+      return
+    end
+
+    unless output_path = window.save_file
+      return
+    end
+
+    output_path = ensure_wav_extension(output_path)
+    controls.play_button.disable
+    controls.voice_combobox.disable
+    controls.speed_slider.disable
+    controls.status_label.text = "保存を開始中..."
+
+    on_status = ->(message : String) { controls.status_label.text = message }
+    on_finish = ->(result : AudioExportResult, message : String) {
+      controls.play_button.enable if state.voicevox_ready?
+      controls.voice_combobox.enable
+      controls.speed_slider.enable
+
+      case result
+      when AudioExportResult::Success
+        controls.status_label.text = "保存完了"
+        window.msg_box("VOVX", "音声を保存しました\n#{message}")
+      when AudioExportResult::Cancelled
+        controls.status_label.text = "保存を中断しました"
+      when AudioExportResult::Failure
+        controls.status_label.text = "保存失敗"
+        window.msg_box_error("VOVX", message)
+      end
+    }
+
+    exporter.start(state.sentences, state.selected_speaker, state.rate, output_path, on_status, on_finish)
+  end
+
+  private def self.ensure_wav_extension(path : String) : String
+    path.downcase.ends_with?(".wav") ? path : "#{path}.wav"
   end
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil

@@ -22,15 +22,31 @@ module VOVX
 
     begin
       controller = PlaybackController.new
+      exporter = AudioExporter.new
       startup_context = Fiber::ExecutionContext::Parallel.new("vovx-startup", 1)
-      build_app_menu(state)
+      controls_ref = nil.as(AppControls?)
+      controls = -> {
+        if current_controls = controls_ref
+          current_controls
+        else
+          raise "app controls are not ready"
+        end
+      }
+      build_app_menu(state, controller, exporter, controls)
       controls = build_app_controls(state)
+      controls_ref = controls
       window = controls.window
 
       wire_playback_controls(controls, state, controller, startup_context)
 
       window.on_closing do
         log_event("ui.window_closing")
+        if exporter.running?
+          exporter.request_stop
+          controls.status_label.text = "保存を中断中..."
+          next false
+        end
+
         save_user_settings(state.to_user_settings)
         close_settings_window(state)
         controller.request_stop
