@@ -76,37 +76,35 @@ module VOVX
     private def spawn_producer(work_queue : Channel(File), sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil)) : Nil
       VOVX.log_event("producer.spawn")
       @synthesis_context.spawn(name: "vovx-synth-producer") do
-        begin
-          sentences.each_with_index do |sentence, i|
-            break if stop_requested?
+        sentences.each_with_index do |sentence, i|
+          break if stop_requested?
 
-            queue_status(on_status, "合成中 #{i + 1}/#{sentences.size}")
-            VOVX.log_event("producer.sentence index=#{i + 1}")
+          queue_status(on_status, "合成中 #{i + 1}/#{sentences.size}")
+          VOVX.log_event("producer.sentence index=#{i + 1}")
 
-            wav = begin
-              VOVX.synthesize(sentence, speaker_id, rate)
-            rescue ex
-              VOVX.log_event("producer.error index=#{i + 1} message=#{ex.message}")
-              queue_status(on_status, "合成失敗 #{i + 1}/#{sentences.size}: #{ex.message}")
-              next
-            end
-
-            begin
-              work_queue.send(wav)
-              VOVX.log_event("producer.enqueue index=#{i + 1}")
-            rescue Channel::ClosedError
-              wav.close
-              File.delete?(wav.path)
-              break
-            end
+          wav = begin
+            VOVX.synthesize(sentence, speaker_id, rate)
+          rescue ex
+            VOVX.log_event("producer.error index=#{i + 1} message=#{ex.message}")
+            queue_status(on_status, "合成失敗 #{i + 1}/#{sentences.size}: #{ex.message}")
+            next
           end
-        rescue ex
-          VOVX.log_event("producer.fatal message=#{ex.message}")
-          queue_status(on_status, "エラー: #{ex.message}")
-        ensure
-          work_queue.close
-          VOVX.log_event("producer.done")
+
+          begin
+            work_queue.send(wav)
+            VOVX.log_event("producer.enqueue index=#{i + 1}")
+          rescue Channel::ClosedError
+            wav.close
+            File.delete?(wav.path)
+            break
+          end
         end
+      rescue ex
+        VOVX.log_event("producer.fatal message=#{ex.message}")
+        queue_status(on_status, "エラー: #{ex.message}")
+      ensure
+        work_queue.close
+        VOVX.log_event("producer.done")
       end
     end
 
