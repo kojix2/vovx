@@ -16,12 +16,11 @@ private def read_u32(bytes : Bytes, offset : Int32) : UInt32
   IO::ByteFormat::LittleEndian.decode(UInt32, bytes[offset, 4])
 end
 
-private def test_wav(data : Bytes, sample_rate = 24_000_u32) : Bytes
+private def test_wav(data : Bytes, sample_rate = 24_000_u32, bits_per_sample = 16_u16) : Bytes
   channels = 1_u16
-  bits_per_sample = 16_u16
   block_align = (channels * bits_per_sample // 8).to_u16
   byte_rate = sample_rate * block_align
-  riff_size = 36_u32 + data.size.to_u32
+  riff_size = 36_u32 + data.size.to_u32 + (data.size.odd? ? 1_u32 : 0_u32)
 
   io = IO::Memory.new
   io.write("RIFF".to_slice)
@@ -38,6 +37,7 @@ private def test_wav(data : Bytes, sample_rate = 24_000_u32) : Bytes
   io.write("data".to_slice)
   write_u32(io, data.size.to_u32)
   io.write(data)
+  io.write_byte(0_u8) if data.size.odd?
   io.to_slice
 end
 
@@ -51,6 +51,30 @@ ensure
 end
 
 describe VOVX::WavWriter do
+  it "pads odd-length 8-bit PCM without counting padding as audio" do
+    with_temp_path do |path|
+      writer = VOVX::WavWriter.new(path)
+      writer.append_bytes(test_wav(UInt8.slice(1, 2, 3), bits_per_sample: 8_u16))
+      writer.close
+      output = File.read(path).to_slice
+      output.size.should eq(48)
+      read_u32(output, 4).should eq(40_u32)
+      read_u32(output, 40).should eq(3_u32)
+      output[44, 4].to_a.should eq([1_u8, 2_u8, 3_u8, 0_u8])
+    end
+  end
+
+  it "rejects oversized malformed chunks without integer overflow" do
+    io = IO::Memory.new
+    io.write("RIFF".to_slice)
+    write_u32(io, 36_u32)
+    io.write("WAVEfmt ".to_slice)
+    write_u32(io, UInt32::MAX)
+    expect_raises(Exception, "truncated fmt  chunk") do
+      VOVX::WavWriter.parse(io.to_slice)
+    end
+  end
+
   it "concatenates WAV data and patches canonical header sizes" do
     with_temp_path do |path|
       writer = VOVX::WavWriter.new(path)

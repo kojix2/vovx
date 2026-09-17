@@ -41,17 +41,12 @@ module VOVX
 
       window.on_closing do
         log_event("ui.window_closing")
-        if exporter.running?
-          exporter.request_stop
-          controls.status_label.text = "保存を中断中..."
-          next false
-        end
-
-        save_user_settings(state.to_user_settings)
-        close_settings_window(state)
-        controller.request_stop
-        UIng.quit
-        true
+        request_app_close(controls, state, controller, exporter)
+        false
+      end
+      UIng.on_should_quit do
+        request_app_close(controls, state, controller, exporter)
+        false
       end
 
       center_window_on_main_screen(window, WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -65,6 +60,19 @@ module VOVX
       end
       UIng.main
     ensure
+      state.closing = true
+      state.startup_cancellation.cancel
+      if current_controller = controller
+        current_controller.request_stop
+        current_controller.wait
+      end
+      if current_exporter = exporter
+        current_exporter.request_stop
+        current_exporter.wait
+      end
+      while state.startup_running?
+        sleep 10.milliseconds
+      end
       close_settings_window(state)
       # uiUninit traps if a root uiWindow is still allocated.
       if main_window = window
@@ -77,6 +85,31 @@ module VOVX
           log_event("audio_device.closed")
         end
       rescue
+      end
+    end
+  end
+
+  private def self.request_app_close(controls : AppControls, state : AppState, controller : PlaybackController, exporter : AudioExporter) : Nil
+    return if state.closing?
+
+    state.closing = true
+    state.startup_cancellation.cancel
+    controller.request_stop
+    exporter.request_stop
+    controls.play_button.disable
+    controls.stop_button.disable
+    controls.status_label.text = "終了中..."
+
+    # OS main loop を動かしたまま全ワーカーの後始末を待つ。
+    UIng.timer(20) do
+      if controller.running? || exporter.running? || state.startup_running?
+        1
+      else
+        save_user_settings(state.to_user_settings)
+        close_settings_window(state)
+        controls.window.destroy
+        UIng.quit
+        0
       end
     end
   end

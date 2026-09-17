@@ -53,6 +53,7 @@ module VOVX
     tools_menu = UIng::Menu.new("Tools")
     settings_item = tools_menu.append_preferences_item
     settings_item.on_clicked do
+      next if state.closing?
       show_settings_window(state)
     end
 
@@ -94,6 +95,8 @@ module VOVX
   end
 
   private def self.start_audio_export_from_ui(window : UIng::Window, controls : AppControls, state : AppState, controller : PlaybackController, exporter : AudioExporter) : Nil
+    return if state.closing?
+
     unless state.voicevox_ready?
       window.msg_box_error("VOVX", "VOICEVOX Engine が起動していません")
       return
@@ -124,25 +127,30 @@ module VOVX
     controls.speed_slider.disable
     controls.status_label.text = "保存を開始中..."
 
-    on_status = ->(message : String) { controls.status_label.text = message }
+    on_status = ->(message : String) { controls.status_label.text = message unless state.closing? }
     on_finish = ->(result : AudioExportResult, message : String) {
-      controls.play_button.enable if state.voicevox_ready?
-      controls.voice_combobox.enable
-      controls.speed_slider.enable
-
-      case result
-      when AudioExportResult::Success
-        controls.status_label.text = "保存完了"
-        window.msg_box("VOVX", "音声を保存しました\n#{message}")
-      when AudioExportResult::Cancelled
-        controls.status_label.text = "保存を中断しました"
-      when AudioExportResult::Failure
-        controls.status_label.text = "保存失敗"
-        window.msg_box_error("VOVX", message)
-      end
+      finish_audio_export_from_ui(window, controls, state, result, message)
     }
 
     exporter.start(state.sentences, state.selected_speaker, state.rate, output_path, on_status, on_finish)
+  end
+
+  private def self.finish_audio_export_from_ui(window : UIng::Window, controls : AppControls, state : AppState, result : AudioExportResult, message : String) : Nil
+    return if state.closing?
+    controls.play_button.enable if state.voicevox_ready?
+    controls.voice_combobox.enable
+    controls.speed_slider.enable
+
+    case result
+    when AudioExportResult::Success
+      controls.status_label.text = "保存完了"
+      window.msg_box("VOVX", "音声を保存しました\n#{message}")
+    when AudioExportResult::Cancelled
+      controls.status_label.text = "保存を中断しました"
+    when AudioExportResult::Failure
+      controls.status_label.text = "保存失敗"
+      window.msg_box_error("VOVX", message)
+    end
   end
 
   private def self.ensure_wav_extension(path : String) : String
@@ -151,6 +159,7 @@ module VOVX
 
   private def self.wire_playback_controls(controls : AppControls, state : AppState, controller : PlaybackController, startup_context : Fiber::ExecutionContext::Parallel) : Nil
     controls.play_button.on_clicked do
+      next if state.closing?
       unless state.voicevox_ready?
         start_voicevox_from_ui(controls, state, controller, startup_context)
         next
@@ -191,20 +200,24 @@ module VOVX
 
     ensure_audio_device_ready(state)
 
-    on_status = ->(message : String) { controls.status_label.text = message }
+    on_status = ->(message : String) { controls.status_label.text = message unless state.closing? }
     on_finish = ->(interrupted : Bool) {
-      controls.play_button.enable
-      controls.stop_button.disable
-      controls.voice_combobox.enable
-      controls.speed_slider.enable
-      controls.status_label.text = interrupted ? "停止しました" : "再生完了"
+      unless state.closing?
+        controls.play_button.enable
+        controls.stop_button.disable
+        controls.voice_combobox.enable
+        controls.speed_slider.enable
+        controls.status_label.text = controller.error_message ? "再生失敗" : (interrupted ? "停止しました" : "再生完了")
 
-      if !interrupted && state.quit_after_playback?
-        log_event("ui.quit_after_playback")
-        save_user_settings(state.to_user_settings)
-        close_settings_window(state)
-        controls.window.destroy
-        UIng.quit
+        if !interrupted && state.quit_after_playback?
+          state.closing = true
+          state.startup_cancellation.cancel
+          log_event("ui.quit_after_playback")
+          save_user_settings(state.to_user_settings)
+          close_settings_window(state)
+          controls.window.destroy
+          UIng.quit
+        end
       end
     }
     controller.start(state.sentences, state.selected_speaker, state.rate, on_status, on_finish)

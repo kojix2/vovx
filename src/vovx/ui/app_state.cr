@@ -13,13 +13,26 @@ module VOVX
     property? quit_after_playback : Bool
     property preferred_speaker : Int32?
     property settings_window : UIng::Window? = nil
+    property? closing = false
+    getter startup_cancellation = CancellationToken.new
+    @startup_mutex = Mutex.new
+    @startup_running = false
 
     def initialize(@sentences : Array(String), @styles : Array(VoiceStyleOption), default_rate : Float64, settings : UserSettings)
+      @styles = [VOVX.default_voice_style] if @styles.empty?
       @preferred_speaker = settings.speaker_id
-      @selected_speaker = settings.speaker_id || styles.first.speaker_id
+      @selected_speaker = settings.speaker_id || @styles.first.speaker_id
       @slider_percent = ((settings.rate || default_rate) * 100).round.to_i.clamp(50, 200)
       @auto_play = settings.auto_play?
       @quit_after_playback = settings.quit_after_playback?
+    end
+
+    def startup_running? : Bool
+      @startup_mutex.synchronize { @startup_running }
+    end
+
+    def startup_running=(running : Bool) : Nil
+      @startup_mutex.synchronize { @startup_running = running }
     end
 
     def rate : Float64

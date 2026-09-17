@@ -1,6 +1,7 @@
 require "http/client"
 require "json"
 require "uri/params"
+require "./cancellation"
 
 module VOVX
   ENGINE_CONNECT_TIMEOUT = 1.second
@@ -8,25 +9,29 @@ module VOVX
   ENGINE_READ_TIMEOUT    = 5.seconds
   ENGINE_SYNTH_TIMEOUT   = 120.seconds
 
-  private def self.with_engine_client(read_timeout : Time::Span, & : HTTP::Client -> HTTP::Client::Response) : HTTP::Client::Response
+  private def self.with_engine_client(read_timeout : Time::Span, cancellation : CancellationToken? = nil, & : HTTP::Client -> HTTP::Client::Response) : HTTP::Client::Response
     uri = URI.parse(ENGINE_URL)
     client = HTTP::Client.new(uri)
     client.connect_timeout = ENGINE_CONNECT_TIMEOUT
     client.read_timeout = read_timeout
 
-    yield client
+    if cancellation
+      cancellation.with_client(client) { yield client }
+    else
+      yield client
+    end
   ensure
     client.try &.close
   end
 
-  private def self.engine_get(path : String, read_timeout : Time::Span = ENGINE_READ_TIMEOUT) : HTTP::Client::Response
-    with_engine_client(read_timeout) do |client|
+  private def self.engine_get(path : String, read_timeout : Time::Span = ENGINE_READ_TIMEOUT, cancellation : CancellationToken? = nil) : HTTP::Client::Response
+    with_engine_client(read_timeout, cancellation) do |client|
       client.get(path)
     end
   end
 
-  private def self.engine_post(path : String, headers : HTTP::Headers, body : String? = nil, read_timeout : Time::Span = ENGINE_READ_TIMEOUT) : HTTP::Client::Response
-    with_engine_client(read_timeout) do |client|
+  private def self.engine_post(path : String, headers : HTTP::Headers, body : String? = nil, read_timeout : Time::Span = ENGINE_READ_TIMEOUT, cancellation : CancellationToken? = nil) : HTTP::Client::Response
+    with_engine_client(read_timeout, cancellation) do |client|
       client.post(path, headers: headers, body: body)
     end
   end
@@ -39,9 +44,11 @@ module VOVX
   end
 
   # VOICEVOX Engine が起動しているかを軽量なエンドポイントで確認する。
-  def self.voicevox_engine_running? : Bool
-    response = engine_get("/version", read_timeout: ENGINE_HEALTH_TIMEOUT)
+  def self.voicevox_engine_running?(cancellation : CancellationToken? = nil) : Bool
+    response = engine_get("/version", read_timeout: ENGINE_HEALTH_TIMEOUT, cancellation: cancellation)
     response.success?
+  rescue ex : CancelledError
+    raise ex
   rescue ex
     log_event("voicevox_engine.unavailable message=#{ex.message}")
     false
@@ -74,10 +81,12 @@ module VOVX
 
   # 起動中の VOICEVOX Engine から話者一覧を取得する。
   # Engine 未起動でも UI は開けるように、取得失敗時はデフォルト話者へ落とす。
-  def self.fetch_voice_styles : Array(VoiceStyleOption)
-    response = engine_get("/speakers")
+  def self.fetch_voice_styles(cancellation : CancellationToken? = nil) : Array(VoiceStyleOption)
+    response = engine_get("/speakers", cancellation: cancellation)
     ensure_success!(response, "/speakers")
     parse_voice_styles(response.body)
+  rescue ex : CancelledError
+    raise ex
   rescue ex
     log_event("fetch_voice_styles.error message=#{ex.message}")
     [default_voice_style]
@@ -85,7 +94,7 @@ module VOVX
 
   # 1 文を VOICEVOX Engine で合成し、一時 WAV ファイルとして返す。
   # 呼び出し側は再生後に close と削除を行う責務を持つ。
-  def self.synthesize(sentence : String, speaker_id : Int32, rate : Float64) : File
+  def self.synthesize(sentence : String, speaker_id : Int32, rate : Float64, cancellation : CancellationToken? = nil) : File
     log_event("synthesize.start speaker=#{speaker_id} rate=#{rate} len=#{sentence.size}")
 
     query_params = URI::Params.encode({
@@ -95,7 +104,8 @@ module VOVX
 
     query_res = engine_post(
       "/audio_query?#{query_params}",
-      headers: HTTP::Headers{"accept" => "application/json"}
+      headers: HTTP::Headers{"accept" => "application/json"},
+      cancellation: cancellation
     )
     ensure_success!(query_res, "/audio_query")
 
@@ -111,14 +121,31 @@ module VOVX
       "/synthesis?#{synth_params}",
       headers: HTTP::Headers{"Content-Type" => "application/json"},
       body: query_json.to_json,
-      read_timeout: ENGINE_SYNTH_TIMEOUT
+      read_timeout: ENGINE_SYNTH_TIMEOUT,
+      cancellation: cancellation
     )
     ensure_success!(synth_res, "/synthesis")
 
     file = File.tempfile("voicevox_", ".wav")
-    file.write synth_res.body.to_slice
-    file.flush
-    log_event("synthesize.done speaker=#{speaker_id} path=#{file.path}")
-    file
+    begin
+      file.write synth_res.body.to_slice
+      file.flush
+      cancellation.try &.check!
+      log_event("synthesize.done speaker=#{speaker_id} path=#{file.path}")
+      file
+    rescue ex
+      cleanup_wav(file)
+      raise ex
+    end
+  end
+
+  def self.cleanup_wav(file : File) : Nil
+    begin
+      file.close unless file.closed?
+    ensure
+      File.delete?(file.path)
+    end
+  rescue ex
+    log_event("wav.cleanup_failed path=#{file.path} message=#{ex.message}")
   end
 end

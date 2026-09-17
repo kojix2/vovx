@@ -21,7 +21,8 @@ module VOVX
   end
 
   class WavWriter
-    HEADER_SIZE = 44
+    HEADER_SIZE   = 44
+    MAX_DATA_SIZE = UInt32::MAX - 37_u32
 
     @format : WavFormat? = nil
     @data_size = 0_u32
@@ -47,7 +48,7 @@ module VOVX
       end
 
       data_size = wav.data_size.to_u32
-      raise "WAV data is too large" if @data_size > UInt32::MAX - data_size
+      raise "WAV data is too large" if data_size > MAX_DATA_SIZE || @data_size > MAX_DATA_SIZE - data_size
 
       @file.write(bytes[wav.data_offset, wav.data_size])
       @data_size += data_size
@@ -111,12 +112,11 @@ module VOVX
 
     private def self.read_chunk(bytes : Bytes, offset : Int32) : Chunk
       chunk_id = String.new(bytes[offset, 4])
-      chunk_size = read_u32(bytes, offset + 4).to_i
       chunk_start = offset + 8
-      chunk_end = chunk_start + chunk_size
-      raise "invalid WAV: truncated #{chunk_id} chunk" if chunk_end > bytes.size
+      chunk_size = read_u32(bytes, offset + 4)
+      raise "invalid WAV: truncated #{chunk_id} chunk" if chunk_size > (bytes.size - chunk_start).to_u32
 
-      Chunk.new(chunk_id, chunk_start, chunk_size)
+      Chunk.new(chunk_id, chunk_start, chunk_size.to_i)
     end
 
     private def self.parse_format(bytes : Bytes, chunk : Chunk) : WavFormat
@@ -135,7 +135,7 @@ module VOVX
     private def write_header(format : WavFormat, data_size : UInt32) : Nil
       @file.rewind
       @file.write "RIFF".to_slice
-      write_u32(36_u32 + data_size)
+      write_u32(36_u32 + data_size + (data_size.odd? ? 1_u32 : 0_u32))
       @file.write "WAVE".to_slice
       @file.write "fmt ".to_slice
       write_u32(16_u32)
@@ -150,6 +150,7 @@ module VOVX
     end
 
     private def patch_header(format : WavFormat, data_size : UInt32) : Nil
+      @file.write(UInt8.slice(0)) if data_size.odd?
       write_header(format, data_size)
       @file.flush
     end

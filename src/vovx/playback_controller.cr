@@ -1,223 +1,182 @@
 require "raudio"
 require "uing"
+require "./voicevox_client"
 
 module VOVX
-  # 合成と再生を非同期に進めるコントローラ。
-  # GUI スレッドを塞がないよう、合成用と再生用に別々の execution context を使う。
+  # 合成と再生は別々の context、Sound の操作は再生 context だけで行う。
   class PlaybackController
     @mutex = Mutex.new
     @running = false
-    @stop_requested = false
-    @current_sound : Raudio::Sound? = nil
+    @cancellation : CancellationToken? = nil
     @work_queue : Channel(File)? = nil
-
-    # ワーカー Fiber を明示的に分離し、HTTP 合成と音声再生が UI を止めないようにする。
-    @synthesis_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-synth", 1)
-    @playback_context : Fiber::ExecutionContext::Parallel = Fiber::ExecutionContext::Parallel.new("vovx-playback", 1)
+    @workers_remaining = 0
+    @error_message : String? = nil
+    @synthesis_context = Fiber::ExecutionContext::Parallel.new("vovx-synth", 1)
+    @playback_context = Fiber::ExecutionContext::Parallel.new("vovx-playback", 1)
 
     def running? : Bool
       @mutex.synchronize { @running }
     end
 
-    # 現在の合成・再生を止める。
-    # Channel を閉じ、再生中の Sound があれば stop して、各ワーカーの ensure に後始末を任せる。
+    def error_message : String?
+      @mutex.synchronize { @error_message }
+    end
+
     def request_stop : Nil
       VOVX.log_event("stop.requested")
-      sound, queue = @mutex.synchronize do
-        @stop_requested = true
-        {@current_sound, @work_queue}
-      end
-
-      begin
-        queue.try &.close
-      rescue Channel::ClosedError
-      end
-
-      begin
-        sound.try &.stop
-      rescue
+      @mutex.synchronize do
+        @cancellation.try &.cancel
+        @work_queue.try &.close
       end
     end
 
-    # 再生処理を開始する。すでに実行中の場合は false を返す。
-    # on_status/on_finish は必ず UIng.queue_main 経由で呼び、UI 更新をメインスレッドに戻す。
+    # UI の main loop を抜けた後、資源を破棄する前に呼ぶ。
+    def wait : Nil
+      while running?
+        sleep 10.milliseconds
+      end
+    end
+
+    # Bool の完了引数は従来どおり、停止または失敗なら true。
     def start(sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Bool
+      work_queue = Channel(File).new(2)
+      cancellation = CancellationToken.new
       playback_sentences = @mutex.synchronize do
         return false if @running
         @running = true
-        @stop_requested = false
+        @error_message = nil
+        @cancellation = cancellation
+        @work_queue = work_queue
+        @workers_remaining = 2
         sentences.dup
       end
-      sentence_count = playback_sentences.size
-      VOVX.log_event("playback.start speaker=#{speaker_id} rate=#{rate} sentences=#{sentence_count}")
+      VOVX.log_event("playback.start speaker=#{speaker_id} rate=#{rate} sentences=#{playback_sentences.size}")
 
-      work_queue = Channel(File).new(2)
-      @mutex.synchronize { @work_queue = work_queue }
-
+      consumer_started = false
+      producer_started = false
       begin
-        spawn_producer(work_queue, playback_sentences, speaker_id, rate, on_status)
+        spawn_consumer(work_queue, cancellation, playback_sentences.size, on_status, on_finish)
+        consumer_started = true
+        spawn_producer(work_queue, cancellation, playback_sentences, speaker_id, rate, on_status, on_finish)
+        producer_started = true
       rescue ex
-        fail_start("producer.spawn_failed message=#{ex.message}", on_status, on_finish)
-        return true
+        record_error("ワーカー起動失敗: #{ex.message}")
+        request_stop
+        worker_finished(cancellation, on_finish) unless consumer_started
+        worker_finished(cancellation, on_finish) unless producer_started
       end
-
-      begin
-        spawn_consumer(work_queue, sentence_count, on_status, on_finish)
-      rescue ex
-        fail_start("consumer.spawn_failed message=#{ex.message}", on_status, on_finish)
-        return true
-      end
-
       true
     end
 
-    # producer: 文ごとに WAV を合成し、再生側へ渡す。
-    # バッファを小さくして、停止要求後に作り過ぎた一時ファイルが残りにくいようにする。
-    private def spawn_producer(work_queue : Channel(File), sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil)) : Nil
-      VOVX.log_event("producer.spawn")
+    private def spawn_producer(work_queue : Channel(File), cancellation : CancellationToken, sentences : Array(String), speaker_id : Int32, rate : Float64, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
       @synthesis_context.spawn(name: "vovx-synth-producer") do
         sentences.each_with_index do |sentence, i|
-          break if stop_requested?
-
+          cancellation.check!
           queue_status(on_status, "合成中 #{i + 1}/#{sentences.size}")
-          VOVX.log_event("producer.sentence index=#{i + 1}")
-
-          wav = begin
-            VOVX.synthesize(sentence, speaker_id, rate)
-          rescue ex
-            VOVX.log_event("producer.error index=#{i + 1} message=#{ex.message}")
-            queue_status(on_status, "合成失敗 #{i + 1}/#{sentences.size}: #{ex.message}")
-            next
-          end
-
+          wav = synthesize(sentence, speaker_id, rate, cancellation)
           begin
+            cancellation.check!
             work_queue.send(wav)
-            VOVX.log_event("producer.enqueue index=#{i + 1}")
-          rescue Channel::ClosedError
-            wav.close
-            File.delete?(wav.path)
-            break
+          rescue ex
+            VOVX.cleanup_wav(wav)
+            raise ex
           end
         end
+      rescue CancelledError | Channel::ClosedError
+        # 停止時の残りファイルは consumer が回収する。
       rescue ex
-        VOVX.log_event("producer.fatal message=#{ex.message}")
-        queue_status(on_status, "エラー: #{ex.message}")
+        record_error("合成失敗: #{ex.message}")
+        queue_status(on_status, "合成失敗: #{ex.message}")
+        request_stop
       ensure
         work_queue.close
-        VOVX.log_event("producer.done")
+        worker_finished(cancellation, on_finish)
       end
     end
 
-    # consumer: 合成済み WAV を受け取り、1 件ずつ再生して削除する。
-    private def spawn_consumer(work_queue : Channel(File), sentence_count : Int32, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
-      VOVX.log_event("consumer.spawn")
+    private def spawn_consumer(work_queue : Channel(File), cancellation : CancellationToken, sentence_count : Int32, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
       @playback_context.spawn(name: "vovx-playback-consumer") do
-        interrupted = false
         played = 0
         begin
           while wav = work_queue.receive?
-            played += 1
             begin
-              if stop_requested?
-                interrupted = true
-                begin
-                  work_queue.close
-                rescue Channel::ClosedError
-                end
-                VOVX.log_event("consumer.stop_detected played=#{played}")
-                break
-              end
-
+              next if cancellation.cancelled?
+              played += 1
               queue_status(on_status, "再生中 #{played}/#{sentence_count}")
-              VOVX.log_event("consumer.play index=#{played} path=#{wav.path}")
-              play_wav(wav.path)
+              play_wav(wav.path, cancellation)
             ensure
-              wav.close
-              File.delete?(wav.path)
-              VOVX.log_event("consumer.cleanup index=#{played}")
+              VOVX.cleanup_wav(wav)
             end
           end
-
-          interrupted ||= stop_requested?
+        rescue CancelledError
         rescue ex
-          interrupted = true
-          VOVX.log_event("consumer.fatal message=#{ex.message}")
-          queue_status(on_status, "エラー: #{ex.message}")
+          record_error("再生失敗: #{ex.message}")
+          queue_status(on_status, "再生失敗: #{ex.message}")
+          request_stop
         ensure
-          finish_playback(interrupted, on_finish)
+          # 再生エラーでも sender を解放し、buffer の全件を削除する。
+          work_queue.close
+          while wav = work_queue.receive?
+            VOVX.cleanup_wav(wav)
+          end
+          worker_finished(cancellation, on_finish)
         end
       end
     end
 
-    private def finish_playback(interrupted : Bool, on_finish : Proc(Bool, Nil)) : Nil
-      @mutex.synchronize do
-        @running = false
-        @stop_requested = false
-        @current_sound = nil
-        @work_queue = nil
+    private def record_error(message : String) : Nil
+      @mutex.synchronize { @error_message ||= message }
+      VOVX.log_event("playback.error message=#{message}")
+    end
+
+    private def worker_finished(cancellation : CancellationToken, on_finish : Proc(Bool, Nil)) : Nil
+      finished = @mutex.synchronize do
+        @workers_remaining -= 1
+        @workers_remaining == 0
       end
+      return unless finished
+
+      interrupted = cancellation.cancelled? || !error_message.nil?
       VOVX.log_event("playback.finish interrupted=#{interrupted}")
-      UIng.queue_main do
-        on_finish.call(interrupted)
+      begin
+        dispatch { on_finish.call(interrupted) }
+      ensure
+        # 全ワーカーの後始末と最後の UI callback の登録まで実行中とする。
+        @mutex.synchronize do
+          @work_queue = nil
+          @cancellation = nil
+          @running = false
+        end
       end
     end
 
-    # ワーカー起動自体に失敗した場合の共通復旧処理。
-    private def fail_start(message : String, on_status : Proc(String, Nil), on_finish : Proc(Bool, Nil)) : Nil
-      VOVX.log_event(message)
-      @mutex.synchronize do
-        @running = false
-        @stop_requested = false
-        @current_sound = nil
-        @work_queue = nil
-      end
-      queue_status(on_status, "ワーカー起動失敗")
-      UIng.queue_main do
-        on_finish.call(true)
-      end
+    protected def synthesize(sentence : String, speaker_id : Int32, rate : Float64, cancellation : CancellationToken) : File
+      VOVX.synthesize(sentence, speaker_id, rate, cancellation)
     end
 
-    private def stop_requested? : Bool
-      @mutex.synchronize { @stop_requested }
+    protected def dispatch(&callback : -> Nil) : Nil
+      UIng.queue_main(&callback)
     end
 
-    # libui の部品更新はメインループ上で実行する。
     private def queue_status(on_status : Proc(String, Nil), message : String) : Nil
-      UIng.queue_main do
-        on_status.call(message)
-      end
+      dispatch { on_status.call(message) }
     end
 
-    # WAV ファイルを同期的に再生する。
-    # 停止要求を短い間隔で確認し、要求があれば Sound.stop を試みる。
-    private def play_wav(path : String) : Nil
-      VOVX.log_event("player.start path=#{path}")
+    protected def play_wav(path : String, cancellation : CancellationToken) : Nil
+      cancellation.check!
       sound = Raudio::Sound.load(path)
       begin
-        @mutex.synchronize do
-          @current_sound = sound
-        end
-
+        cancellation.check!
         sound.play
-        while sound.playing?
-          break if stop_requested?
+        while sound.playing? && !cancellation.cancelled?
           sleep 10.milliseconds
         end
-
-        if stop_requested?
-          begin
-            sound.stop
-          rescue
-          end
-        end
       ensure
-        sound.release
-      end
-
-      VOVX.log_event("player.done path=#{path}")
-    ensure
-      @mutex.synchronize do
-        @current_sound = nil
+        begin
+          sound.stop if cancellation.cancelled?
+        ensure
+          sound.release
+        end
       end
     end
   end

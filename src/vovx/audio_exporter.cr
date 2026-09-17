@@ -1,5 +1,6 @@
 require "uing"
 require "./wav"
+require "./voicevox_client"
 
 module VOVX
   enum AudioExportResult
@@ -11,7 +12,7 @@ module VOVX
   class AudioExporter
     @mutex = Mutex.new
     @running = false
-    @stop_requested = false
+    @cancellation : CancellationToken? = nil
     @context = Fiber::ExecutionContext::Parallel.new("vovx-export", 1)
 
     def running? : Bool
@@ -19,20 +20,27 @@ module VOVX
     end
 
     def request_stop : Nil
-      @mutex.synchronize { @stop_requested = true }
+      @mutex.synchronize { @cancellation.try &.cancel }
+    end
+
+    def wait : Nil
+      while running?
+        sleep 10.milliseconds
+      end
     end
 
     def start(sentences : Array(String), speaker_id : Int32, rate : Float64, output_path : String, on_status : Proc(String, Nil), on_finish : Proc(AudioExportResult, String, Nil)) : Bool
+      cancellation = CancellationToken.new
       export_sentences = @mutex.synchronize do
         return false if @running
         @running = true
-        @stop_requested = false
+        @cancellation = cancellation
         sentences.dup
       end
 
       VOVX.log_event("export.start speaker=#{speaker_id} rate=#{rate} sentences=#{export_sentences.size} path=#{output_path}")
       @context.spawn(name: "vovx-audio-export") do
-        export_to_file(export_sentences, speaker_id, rate, output_path, on_status, on_finish)
+        export_to_file(export_sentences, speaker_id, rate, output_path, cancellation, on_status, on_finish)
       end
       true
     rescue ex
@@ -40,66 +48,76 @@ module VOVX
       true
     end
 
-    private def export_to_file(sentences : Array(String), speaker_id : Int32, rate : Float64, output_path : String, on_status : Proc(String, Nil), on_finish : Proc(AudioExportResult, String, Nil)) : Nil
-      tmp_path = "#{output_path}.tmp"
+    private def export_to_file(sentences : Array(String), speaker_id : Int32, rate : Float64, output_path : String, cancellation : CancellationToken, on_status : Proc(String, Nil), on_finish : Proc(AudioExportResult, String, Nil)) : Nil
+      tmp_path = nil
       writer = nil
+      result = AudioExportResult::Failure
+      message : String
 
       begin
-        File.delete?(tmp_path)
+        cancellation.check!
+        # 同じディレクトリの固有名を使い、他のプロセスや既存 .tmp を壊さない。
+        temporary = File.tempfile("vovx_export_", ".tmp", dir: File.dirname(output_path))
+        tmp_path = temporary.path
+        temporary.close
         writer = WavWriter.new(tmp_path)
 
         sentences.each_with_index do |sentence, i|
-          if stop_requested?
-            finish(AudioExportResult::Cancelled, "保存を中断しました", on_finish)
-            return
-          end
-
-          queue_status(on_status, "保存用に合成中 #{i + 1}/#{sentences.size}")
-          wav = VOVX.synthesize(sentence, speaker_id, rate)
+          cancellation.check!
+          status = "保存用に合成中 #{i + 1}/#{sentences.size}"
+          dispatch { on_status.call(status) }
+          wav = synthesize(sentence, speaker_id, rate, cancellation)
           begin
+            cancellation.check!
             writer.append_file(wav.path)
           ensure
-            wav.close
-            File.delete?(wav.path)
+            VOVX.cleanup_wav(wav)
           end
         end
 
         writer.close
         writer = nil
-        File.rename(tmp_path, output_path)
+        @mutex.synchronize do
+          cancellation.check!
+          File.rename(tmp_path, output_path)
+        end
+        result = AudioExportResult::Success
+        message = output_path
         VOVX.log_event("export.done path=#{output_path}")
-        finish(AudioExportResult::Success, output_path, on_finish)
+      rescue CancelledError
+        result = AudioExportResult::Cancelled
+        message = "保存を中断しました"
       rescue ex
         VOVX.log_event("export.error message=#{ex.message}")
-        finish(AudioExportResult::Failure, "保存に失敗しました: #{ex.message}", on_finish)
+        message = "保存に失敗しました: #{ex.message}"
       ensure
         begin
           writer.try &.close
         rescue
         end
-        File.delete?(tmp_path)
+        begin
+          File.delete?(tmp_path) if tmp_path
+        ensure
+          finish(result, message, on_finish)
+        end
       end
     end
 
     private def finish(result : AudioExportResult, message : String, on_finish : Proc(AudioExportResult, String, Nil)) : Nil
+      dispatch { on_finish.call(result, message) }
+    ensure
       @mutex.synchronize do
+        @cancellation = nil
         @running = false
-        @stop_requested = false
-      end
-
-      UIng.queue_main do
-        on_finish.call(result, message)
       end
     end
 
-    private def stop_requested? : Bool
-      @mutex.synchronize { @stop_requested }
+    protected def synthesize(sentence : String, speaker_id : Int32, rate : Float64, cancellation : CancellationToken) : File
+      VOVX.synthesize(sentence, speaker_id, rate, cancellation)
     end
 
-    private def queue_status(on_status : Proc(String, Nil), message : String) : Nil
-      UIng.queue_main do
-        on_status.call(message)
-      end
+    protected def dispatch(&callback : -> Nil) : Nil
+      UIng.queue_main(&callback)
     end
   end
 end
