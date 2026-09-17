@@ -58,31 +58,38 @@ module VOVX
     end
 
     tools_menu.append_item("音声を保存...").on_clicked do |window|
-      start_audio_export_from_ui(window, controls.call, state, controller, exporter)
+      current_controls = controls.call
+      start_audio_export_from_ui(window || current_controls.window, current_controls, state, controller, exporter)
     end
 
     {% if flag?(:darwin) %}
       tools_menu.append_separator
       tools_menu.append_item("サービスメニューに追加/更新").on_clicked do |window|
+        next if state.closing?
+        parent = window || controls.call.window
         success, message = install_service_workflow
         if success
-          window.msg_box("VOVX", message)
+          parent.msg_box("VOVX", message)
         else
-          window.msg_box_error("VOVX", message)
+          parent.msg_box_error("VOVX", message)
         end
       end
       tools_menu.append_item("サービスメニューから削除").on_clicked do |window|
+        next if state.closing?
+        parent = window || controls.call.window
         success, message = uninstall_service_workflow
         if success
-          window.msg_box("VOVX", message)
+          parent.msg_box("VOVX", message)
         else
-          window.msg_box_error("VOVX", message)
+          parent.msg_box_error("VOVX", message)
         end
       end
       tools_menu.append_item("サービスメニューのフォルダを開く").on_clicked do |window|
+        next if state.closing?
+        parent = window || controls.call.window
         success, message = open_service_workflow_directory
         unless success
-          window.msg_box_error("VOVX", message)
+          parent.msg_box_error("VOVX", message)
         end
       end
     {% end %}
@@ -90,7 +97,9 @@ module VOVX
     help_menu = UIng::Menu.new("Help")
     about_item = help_menu.append_about_item
     about_item.on_clicked do |window|
-      window.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
+      next if state.closing?
+      parent = window || controls.call.window
+      parent.msg_box("About VOVX", "#{REPOSITORY_URL}\n#{VERSION}")
     end
   end
 
